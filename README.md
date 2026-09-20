@@ -8,7 +8,7 @@ Add a `gate` job, read `should-run`, and only run those jobs when `needs.gate.ou
 
 ## Usage
 
-Pin a version tag or SHA, not `@main`. User-facing changes are in [CHANGELOG.md](CHANGELOG.md). How to cut a version is in [RELEASING.md](RELEASING.md).
+The example pins `@v1`. That tag is the latest 1.x and moves when a new 1.x is tagged. A commit SHA stays on that tree: `raulgg/stack-ci-gate@dc6d1ab44cd57a67eea8049697cece1274a8b30f` (`v1.0.0`). Do not pin `@main`. User-facing changes are in [CHANGELOG.md](CHANGELOG.md). How to cut a version is in [RELEASING.md](RELEASING.md).
 
 ```yaml
 name: CI
