@@ -32,7 +32,7 @@ function oneLine(text) {
   return String(text).replace(/\s+/g, ' ').trim()
 }
 
-function writeOutputs(outputPath, result, log) {
+function writeOutputs(outputPath, result, log, trace = {}) {
   const reason = oneLine(result.reason)
   appendOutput(outputPath, 'should-run', stringifyBool(result.should_run))
   appendOutput(outputPath, 'reason', reason)
@@ -42,6 +42,9 @@ function writeOutputs(outputPath, result, log) {
   appendOutput(outputPath, 'position', result.position ?? '')
   appendOutput(outputPath, 'size', result.size ?? '')
   log.log(reason)
+  log.log(
+    `gate-trace event=${trace.eventName ?? ''} action=${trace.eventAction ?? ''} source=${trace.source ?? ''} event_stack=${trace.eventStack ? 'yes' : 'no'}`,
+  )
 }
 
 export async function run(env = process.env, deps = {}) {
@@ -49,7 +52,7 @@ export async function run(env = process.env, deps = {}) {
   const sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
   const log = deps.log ?? console
   const outputPath = env.GITHUB_OUTPUT
-  const write = (result) => writeOutputs(outputPath, result, log)
+  const write = (result, trace) => writeOutputs(outputPath, result, log, trace)
 
   let bottomN
   let runTop
@@ -60,7 +63,7 @@ export async function run(env = process.env, deps = {}) {
     if (err instanceof ConfigError) {
       log.error(`::error::${err.message}`)
       const result = failOpen(`invalid input; running CI (${err.message})`)
-      write(result)
+      write(result, { eventName: env.GITHUB_EVENT_NAME || '', source: 'invalid-input' })
       return { exitCode: 0, result, error: err }
     }
     throw err
@@ -77,7 +80,7 @@ export async function run(env = process.env, deps = {}) {
         stack: null,
         prBaseRef: '',
       })
-      write(result)
+      write(result, { eventName, source: 'n/a' })
       return { exitCode: 0, result }
     }
 
@@ -105,13 +108,18 @@ export async function run(env = process.env, deps = {}) {
       prBaseRef: resolved.prBaseRef,
       remainingDepth: resolved.remainingDepth,
     })
-    write(result)
+    write(result, {
+      eventName,
+      eventAction: event.action,
+      source: resolved.source,
+      eventStack: pr.stack,
+    })
     return { exitCode: 0, result }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     log.warn(`Could not gate stacked CI; running checks by default. (${message})`)
     const result = failOpen(`error; running CI (${message})`)
-    write(result)
+    write(result, { eventName, source: 'error' })
     return { exitCode: 0, result }
   }
 }

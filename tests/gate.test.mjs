@@ -126,6 +126,48 @@ test('opened with no event stack, API returns middle → should-run=false', asyn
   assert.equal(parseOutputs(env.GITHUB_OUTPUT)['is-stacked'], 'true')
 })
 
+test('opened path logs gate-trace with source=api and no event stack', async () => {
+  const dir = tempDir()
+  const event = writeEvent(dir, {
+    action: 'opened',
+    pull_request: {
+      number: 42,
+      base: { ref: 'feat/auth' },
+      stack: null,
+    },
+  })
+  const env = baseEnv(dir, {
+    GITHUB_EVENT_NAME: 'pull_request',
+    GITHUB_EVENT_PATH: event,
+  })
+  const lines = []
+  await run(env, {
+    log: {
+      log(msg) {
+        lines.push(String(msg))
+      },
+      warn() {},
+      error() {},
+    },
+    sleep: async () => {},
+    fetch: async () =>
+      jsonResponse({
+        number: 42,
+        base: { ref: 'feat/auth' },
+        stack: {
+          number: 50,
+          position: 2,
+          size: 3,
+          base: { ref: 'main' },
+        },
+      }),
+  })
+  const trace = lines.find((line) => line.includes('gate-trace'))
+  assert.match(trace, /action=opened/)
+  assert.match(trace, /source=api/)
+  assert.match(trace, /event_stack=no/)
+})
+
 test('opened with no event stack, API empty then stack on retry → uses stacked result', async () => {
   const dir = tempDir()
   const event = writeEvent(dir, {

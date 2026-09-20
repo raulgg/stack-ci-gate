@@ -28,6 +28,7 @@ jobs:
         id: gate
       - name: Show gate outputs
         env:
+          EVENT_ACTION: ${{ github.event.action }}
           SHOULD_RUN: ${{ steps.gate.outputs.should-run }}
           REASON: ${{ steps.gate.outputs.reason }}
           IS_STACKED: ${{ steps.gate.outputs.is-stacked }}
@@ -36,6 +37,7 @@ jobs:
           POSITION: ${{ steps.gate.outputs.position }}
           SIZE: ${{ steps.gate.outputs.size }}
         run: |
+          echo "event_action=$EVENT_ACTION"
           echo "should-run=$SHOULD_RUN"
           echo "reason=$REASON"
           echo "is-stacked=$IS_STACKED"
