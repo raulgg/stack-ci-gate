@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*.*.*'
 
 permissions:
   contents: write
@@ -13,7 +13,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Notes from changelog
+        run: node .github/scripts/changelog-notes.mjs "${GITHUB_REF_NAME}" > /tmp/release-notes.md
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${GITHUB_REF_NAME}" --generate-notes --verify-tag
+        run: >
+          gh release create "${GITHUB_REF_NAME}"
+          --verify-tag
+          --title "${GITHUB_REF_NAME}"
+          --notes-file /tmp/release-notes.md
+
+  major-tag:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Move major version tag
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          major="${tag%%.*}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f "$major" "$tag"
+          git push origin "refs/tags/${major}" --force
