@@ -6,7 +6,7 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 
 ### Changed
 
-- Usage example sets `contents: read` and `pull-requests: read` on the `gate` job, and documents that `github-token` should be `github.token` and that `pull_request_target` runs with the base repository token and secrets.
+- Usage example sets `contents: read` and `pull-requests: read` on the `gate` job, uses `github.token`, and puts the action on `pull_request` so the job does not get the base repository token and secrets from `pull_request_target`.
 - README states that `@v1` tracks the latest 1.x and that a commit SHA freezes the tree.
 
 ## 1.0.0 - 2026-09-20
