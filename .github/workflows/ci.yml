@@ -11,7 +11,43 @@ permissions:
   pull-requests: read
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      should-run: ${{ steps.gate.outputs.should-run }}
+      reason: ${{ steps.gate.outputs.reason }}
+      is-stacked: ${{ steps.gate.outputs.is-stacked }}
+      is-bottom: ${{ steps.gate.outputs.is-bottom }}
+      is-top: ${{ steps.gate.outputs.is-top }}
+      position: ${{ steps.gate.outputs.position }}
+      size: ${{ steps.gate.outputs.size }}
+    steps:
+      # uses: ./ needs the repo on disk. Published tags do not.
+      - uses: actions/checkout@v4
+      - uses: ./
+        id: gate
+      - name: Show gate outputs
+        env:
+          SHOULD_RUN: ${{ steps.gate.outputs.should-run }}
+          REASON: ${{ steps.gate.outputs.reason }}
+          IS_STACKED: ${{ steps.gate.outputs.is-stacked }}
+          IS_BOTTOM: ${{ steps.gate.outputs.is-bottom }}
+          IS_TOP: ${{ steps.gate.outputs.is-top }}
+          POSITION: ${{ steps.gate.outputs.position }}
+          SIZE: ${{ steps.gate.outputs.size }}
+        run: |
+          echo "should-run=$SHOULD_RUN"
+          echo "reason=$REASON"
+          echo "is-stacked=$IS_STACKED"
+          echo "is-bottom=$IS_BOTTOM"
+          echo "is-top=$IS_TOP"
+          echo "position=$POSITION"
+          echo "size=$SIZE"
+          test -n "$SHOULD_RUN"
+
   unit:
+    needs: gate
+    if: needs.gate.outputs.should-run == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,13 +55,3 @@ jobs:
         with:
           node-version: '24'
       - run: node --test
-
-  self:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./
-        id: gate
-      - run: |
-          echo "should-run=${{ steps.gate.outputs.should-run }} reason=${{ steps.gate.outputs.reason }}"
-          test -n "${{ steps.gate.outputs.should-run }}"
