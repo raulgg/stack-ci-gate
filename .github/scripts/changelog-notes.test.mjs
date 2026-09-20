@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { notesFor, versionFromTag } from '../.github/scripts/changelog-notes.mjs'
+import { notesFor, versionFromTag } from './changelog-notes.mjs'
 
 const sample = `# Changelog
 
