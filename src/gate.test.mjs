@@ -254,6 +254,38 @@ test('API failure fail-opens should-run=true', async () => {
   assert.match(warnings.join('\n'), /running checks by default/)
 })
 
+test('API error body is not logged or written to reason', async () => {
+  const dir = tempDir()
+  const event = writeEvent(dir, {
+    action: 'synchronize',
+    pull_request: { number: 42, base: { ref: 'feat/auth' }, stack: null },
+  })
+  const env = baseEnv(dir, {
+    GITHUB_EVENT_NAME: 'pull_request',
+    GITHUB_EVENT_PATH: event,
+  })
+  const warnings = []
+  const logs = []
+  const { result } = await run(env, {
+    log: {
+      log(msg) {
+        logs.push(String(msg))
+      },
+      error() {},
+      warn(msg) {
+        warnings.push(String(msg))
+      },
+    },
+    fetch: async () =>
+      jsonResponse({ message: '::error::pwned ##[warning]x' }, 502),
+  })
+  const text = [warnings.join('\n'), logs.join('\n'), result.reason].join('\n')
+  assert.equal(result.should_run, true)
+  assert.doesNotMatch(text, /pwned/)
+  assert.doesNotMatch(text, /::error::/)
+  assert.doesNotMatch(text, /##\[warning\]/)
+})
+
 test('pr_number override ignores triggering event stack', async () => {
   const dir = tempDir()
   const event = writeEvent(dir, {

@@ -206,6 +206,7 @@ test('GET sends API version and abort signal', async () => {
     },
   })
   assert.equal(init.headers['X-GitHub-Api-Version'], GITHUB_API_VERSION)
+  assert.equal(init.redirect, 'error')
   assert.ok(init.signal)
 })
 
@@ -240,6 +241,10 @@ test('API failure propagates so the gate can fail open', async () => {
         token: 't',
         fetchImpl: async () => jsonResponse({ message: 'boom' }, 500),
       }),
-    /500/,
+    (err) => {
+      assert.match(String(err.message), /500/)
+      assert.doesNotMatch(String(err.message), /boom/)
+      return true
+    },
   )
 })

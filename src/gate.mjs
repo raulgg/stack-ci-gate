@@ -32,8 +32,13 @@ function oneLine(text) {
   return String(text).replace(/\s+/g, ' ').trim()
 }
 
+/** Neutralize Actions workflow commands in untrusted text. */
+function safeText(text) {
+  return oneLine(text).replaceAll('::', ': :').replaceAll('##[', '# [')
+}
+
 function writeOutputs(outputPath, result, log, trace = {}) {
-  const reason = oneLine(result.reason)
+  const reason = safeText(result.reason)
   appendOutput(outputPath, 'should-run', stringifyBool(result.should_run))
   appendOutput(outputPath, 'reason', reason)
   appendOutput(outputPath, 'is-stacked', stringifyBool(result.is_stacked))
@@ -61,8 +66,8 @@ export async function run(env = process.env, deps = {}) {
     runTop = parseRunTop(inputValue(env, 'run-top'))
   } catch (err) {
     if (err instanceof ConfigError) {
-      log.error(`::error::${err.message}`)
-      const result = failOpen(`invalid input; running CI (${err.message})`)
+      log.error(`::error::${safeText(err.message)}`)
+      const result = failOpen(`invalid input; running CI (${safeText(err.message)})`)
       write(result, { eventName: env.GITHUB_EVENT_NAME || '', source: 'invalid-input' })
       return { exitCode: 0, result, error: err }
     }
@@ -116,7 +121,7 @@ export async function run(env = process.env, deps = {}) {
     })
     return { exitCode: 0, result }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
+    const message = safeText(err instanceof Error ? err.message : String(err))
     log.warn(`Could not gate stacked CI; running checks by default. (${message})`)
     const result = failOpen(`error; running CI (${message})`)
     write(result, { eventName, source: 'error' })

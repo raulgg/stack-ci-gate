@@ -31,11 +31,11 @@ async function githubGet(url, { token, fetchImpl, timeoutMs = FETCH_TIMEOUT_MS }
       'X-GitHub-Api-Version': GITHUB_API_VERSION,
       'User-Agent': 'stack-ci-gate',
     },
+    redirect: 'error',
     signal: AbortSignal.timeout(timeoutMs),
   })
   if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    const err = new Error(`GET ${url} → ${res.status} ${body}`.trim())
+    const err = new Error(`GET ${url} → ${res.status}`)
     err.status = res.status
     throw err
   }
