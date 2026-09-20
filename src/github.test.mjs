@@ -4,7 +4,7 @@ import {
   GITHUB_API_VERSION,
   remainingDepthFromStackPulls,
   resolvePull,
-} from '../src/github.mjs'
+} from './github.mjs'
 
 function jsonResponse(body, status = 200) {
   return {

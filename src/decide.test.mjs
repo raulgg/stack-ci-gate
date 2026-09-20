@@ -5,7 +5,7 @@ import {
   decide,
   parseBottomN,
   parseRunTop,
-} from '../src/decide.mjs'
+} from './decide.mjs'
 
 function stackOf({ position, size, base = 'main' }) {
   return {

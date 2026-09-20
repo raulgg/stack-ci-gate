@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { run } from '../src/gate.mjs'
+import { run } from './gate.mjs'
 
 function jsonResponse(body, status = 200) {
   return {
