@@ -1,10 +1,13 @@
 # Changelog
 
+User-facing changes to this action. The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and version numbers follow [SemVer](https://semver.org/). How to add a bullet and how to cut a version is in [RELEASING.md](RELEASING.md).
+
 ## Unreleased
 
 ### Changed
 
 - Renamed the action to Stack CI Gate (`raulgg/stack-ci-gate`). The example job is `gate`.
+- Renamed output `is-lowest` to `is-bottom`.
 
 ### Added
 

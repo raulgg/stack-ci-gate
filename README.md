@@ -8,7 +8,7 @@ Add a `gate` job, read `should-run`, and only run those jobs when `needs.gate.ou
 
 ## Usage
 
-Pin a version tag or SHA, not `@main`.
+Pin a version tag or SHA, not `@main`. User-facing changes are in [CHANGELOG.md](CHANGELOG.md). How to cut a version is in [RELEASING.md](RELEASING.md).
 
 ```yaml
 name: CI
