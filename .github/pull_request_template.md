@@ -1,19 +1,19 @@
 ## Summary
-<!-- What changed in the product, in 1–3 sentences. -->
+<!-- What changed, in 1–3 sentences. -->
 
 ## Why
-<!-- Why this change — product goal or problem it solves. -->
+<!-- Why this change. -->
 
 -
 
 ## Changes
-<!-- Concrete product/UI/code changes. Prefer bullets. -->
+<!-- Concrete changes. Prefer bullets. -->
 
 -
 
 ## Verification
-<!-- How this was checked (tests, build, manual breakpoints). No infra/agent chatter. -->
+<!-- What ran. `npm test` is the default. Live path only if skip/run on GitHub events changed. -->
 
-- [ ] Unit tests pass
-- [ ] Production build succeeds
-- [ ] Manual check at relevant viewports (note which)
+- [ ] `npm test`
+- [ ] Unit test for the change (file)
+- [ ] Live path (opened / stacked / synchronize / remaining-bottom)
