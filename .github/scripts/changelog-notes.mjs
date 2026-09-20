@@ -19,7 +19,7 @@ export function notesFor(changelog, tag) {
   }
   let end = lines.length
   for (let i = start + 1; i < lines.length; i++) {
-    if (/^## /.test(lines[i])) {
+    if (/^## /.test(lines[i]) || /^\[[^\]]+\]:\s+\S/.test(lines[i])) {
       end = i
       break
     }

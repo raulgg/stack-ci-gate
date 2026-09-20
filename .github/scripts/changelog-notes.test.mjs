@@ -42,3 +42,11 @@ test('notesFor fails when the heading is missing or empty', () => {
   assert.throws(() => notesFor(sample, 'v9.9.9'), /no heading/)
   assert.throws(() => notesFor('## 1.0.0\n\n## 0.9.0\n- x\n', 'v1.0.0'), /empty/)
 })
+
+test('notesFor stops before compare-link footer', () => {
+  const notes = notesFor(
+    '## 1.0.0 - 2026-09-20\n\n- Gate.\n\n[Unreleased]: https://example/compare/v1.0.0...HEAD\n[1.0.0]: https://example/releases/tag/v1.0.0\n',
+    'v1.0.0',
+  )
+  assert.equal(notes, '- Gate.')
+})
