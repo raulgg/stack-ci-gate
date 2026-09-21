@@ -1,5 +1,5 @@
 name: Stack CI Gate
-description: A CI gate for GitHub stacked pull requests. Stop rerunning CI on every layer. Keep the bottom; make the top optional.
+description: A CI gate for GitHub stacked pull requests. Optimize your CI usage. Stop rerunning CI on every layer of the stack.
 author: raulgg
 branding:
   icon: layers

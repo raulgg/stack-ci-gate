@@ -2,7 +2,7 @@
   "name": "stack-ci-gate",
   "private": true,
   "version": "1.0.1",
-  "description": "A CI gate for GitHub stacked pull requests. Stop rerunning CI on every layer. Keep the bottom; make the top optional.",
+  "description": "A CI gate for GitHub stacked pull requests. Optimize your CI usage. Stop rerunning CI on every layer of the stack.",
   "type": "module",
   "engines": {
     "node": ">=20"
