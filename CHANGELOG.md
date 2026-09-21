@@ -4,6 +4,10 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 
 ## Unreleased
 
+### Changed
+
+- Action description: skip redundant CI on stacked pull requests, run remaining-bottom and optionally the top.
+
 ## 1.0.1 - 2026-09-21
 
 ### Changed

@@ -2,7 +2,7 @@
   "name": "stack-ci-gate",
   "private": true,
   "version": "1.0.1",
-  "description": "Decide whether gated jobs should run on this stacked pull request.",
+  "description": "Skip redundant CI on stacked pull requests. Run remaining-bottom and optionally the top.",
   "type": "module",
   "engines": {
     "node": ">=20"
