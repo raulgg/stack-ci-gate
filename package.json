@@ -2,7 +2,7 @@
   "name": "stack-ci-gate",
   "private": true,
   "version": "1.0.1",
-  "description": "CI optimizer for PRs on top of other PRs. Skip mid-stack CI. Keep the next to merge.",
+  "description": "Optimize CI on GitHub stacked pull requests. Skip mid-stack; run the top and bottom of the stack.",
   "type": "module",
   "engines": {
     "node": ">=20"
