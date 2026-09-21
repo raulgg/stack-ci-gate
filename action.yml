@@ -1,5 +1,5 @@
 name: Stack CI Gate
-description: When pull requests are stacked on each other, skip CI in the middle of the chain. Run it on the next one to merge, and on the last one if you want.
+description: When PRs stack on each other, skip CI in the middle. Run it on the next to merge, and the last if you want.
 author: raulgg
 branding:
   icon: layers
