@@ -2,7 +2,7 @@
   "name": "stack-ci-gate",
   "private": true,
   "version": "1.0.1",
-  "description": "Optimize CI on GitHub stacked pull requests. Skip mid-stack; run the top and bottom of the stack.",
+  "description": "A CI gate for GitHub stacked pull requests. Choose to run only the top and bottom of the stack to optimize CI.",
   "type": "module",
   "engines": {
     "node": ">=20"
