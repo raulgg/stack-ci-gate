@@ -2,7 +2,7 @@
   "name": "stack-ci-gate",
   "private": true,
   "version": "1.0.1",
-  "description": "When PRs stack on each other, skip CI in the middle. Run it on the next to merge, and the last if you want.",
+  "description": "Skip extra CI when PRs are stacked. Run it on the next to merge, and the last in the stack.",
   "type": "module",
   "engines": {
     "node": ">=20"
