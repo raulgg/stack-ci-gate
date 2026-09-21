@@ -4,6 +4,8 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 
 ## Unreleased
 
+## 1.0.1 - 2026-09-21
+
 ### Changed
 
 - Fail-open `reason` and logs omit GitHub API response bodies and neutralize `::` / `##[` workflow-command sequences.
@@ -18,5 +20,6 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 - REST fallback on `opened` / `reopened` when `github.event.pull_request.stack` is missing.
 - Remaining-depth lookup via the Stacks API when `bottom-n > 1`.
 
-[Unreleased]: https://github.com/raulgg/stack-ci-gate/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/raulgg/stack-ci-gate/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/raulgg/stack-ci-gate/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/raulgg/stack-ci-gate/releases/tag/v1.0.0

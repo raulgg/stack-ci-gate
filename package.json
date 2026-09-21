@@ -1,7 +1,7 @@
 {
   "name": "stack-ci-gate",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Decide whether gated jobs should run on this stacked pull request.",
   "type": "module",
   "engines": {
