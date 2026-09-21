@@ -53,3 +53,18 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -f "$major" "$tag"
           git push origin "refs/tags/${major}" --force
+
+  marketplace:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+      - name: Marketplace listing covers this tag
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node .github/scripts/marketplace-latest.mjs "${GITHUB_REF_NAME}"

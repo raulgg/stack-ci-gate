@@ -36,6 +36,8 @@ CI creates a GitHub Release when you push an annotated tag that matches `v*.*.*`
 
 CI then force-moves a floating major tag (`v1` for `v1.0.0`) to the same commit. That tag is not a GitHub Release, so it can still move. Do not push `v1` yourself.
 
+GitHub has no API for the Marketplace checkbox: publishing requires 2FA in the browser. A `gh release create` from CI does not move the listing version. The Release workflow's Marketplace job fetches [the listing](https://github.com/marketplace/actions/stack-ci-gate) and fails until `latestRelease` is this tag or newer. `uses: raulgg/stack-ci-gate@v1` does not wait on that job.
+
 ```bash
 git checkout main
 git pull
@@ -48,6 +50,7 @@ Later patches:
 1. PR: Unreleased → `## 1.0.1 - YYYY-MM-DD`, bump `package.json`.
 2. Merge to `main`.
 3. `git tag -a v1.0.1 -m "v1.0.1" && git push origin v1.0.1`.
+4. If the Marketplace job is red, open the edit URL from that job, check **Publish this Action to the GitHub Marketplace**, set primary **Continuous integration** and secondary **Utilities**, Update release, re-run the job.
 
 CI moves `v1` to `v1.0.1`.
 
