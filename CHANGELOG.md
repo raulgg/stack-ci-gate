@@ -6,7 +6,7 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 
 ### Changed
 
-- Action description: skip redundant CI on stacked pull requests, run remaining-bottom and optionally the top.
+- Action `description` explains skipping CI in the middle of a stacked PR chain, running it on the next PR to merge and on the last one if you want.
 
 ## 1.0.1 - 2026-09-21
 

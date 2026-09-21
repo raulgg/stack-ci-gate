@@ -2,7 +2,7 @@
   "name": "stack-ci-gate",
   "private": true,
   "version": "1.0.1",
-  "description": "Skip redundant CI on stacked pull requests. Run remaining-bottom and optionally the top.",
+  "description": "When pull requests are stacked on each other, skip CI in the middle of the chain. Run it on the next one to merge, and on the last one if you want.",
   "type": "module",
   "engines": {
     "node": ">=20"
