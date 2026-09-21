@@ -1,5 +1,5 @@
 name: Stack CI Gate
-description: A CI gate for GitHub stacked pull requests. Always run the bottom of the stack, optionally the top, to optimize CI.
+description: A CI gate for GitHub stacked pull requests. Stop rerunning CI on every layer. Keep the bottom; make the top optional.
 author: raulgg
 branding:
   icon: layers
