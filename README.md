@@ -9,7 +9,7 @@ This GitHub Action skips redundant CI on [GitHub's stacked pull requests](https:
 
 This action uses stack metadata so the jobs you gate run on the bottom of the remaining stack, and on the top if you leave that on. Mid-stack pull requests skip.
 
-## Usage
+## Quick start
 
 1. Trigger on all five `pull_request` types. GitHub's default omits `stacked` and `edited`. [Why those types](#pull_request-types)
 
@@ -41,7 +41,11 @@ needs: gate
 if: needs.gate.outputs.should-run == 'true'
 ```
 
-A complete workflow:
+## Usage
+
+Pin a major tag (`@v1` in these examples). It moves with compatible releases. A version tag or a SHA from [Releases](https://github.com/raulgg/stack-ci-gate/releases) stays put. Do not pin `@main`.
+
+The example adds `merge_group` for a merge queue (`should-run` is `'true'` on that event). The gate job lists `contents: read` and `pull-requests: read` so they stay if the workflow later grants write elsewhere. Use `pull_request`. `pull_request_target` would give this job the base repository token and secrets.
 
 ```yaml
 name: CI
@@ -74,12 +78,6 @@ jobs:
       - uses: actions/checkout@v4
       - run: npm test
 ```
-
-Pin `@v1`. That tag tracks the latest 1.x. A version tag (`@v1.0.1`) or a commit SHA from the [Release](https://github.com/raulgg/stack-ci-gate/releases) stays on that tree. Do not pin `@main`.
-
-List `contents: read` and `pull-requests: read` on the `gate` job so they stay even if the workflow later grants write elsewhere. Use `pull_request`. `pull_request_target` would give this job the base repository token and secrets.
-
-If you use a merge queue, keep `merge_group` next to `pull_request`. The action sets `should-run` to `'true'` on it.
 
 Jobs that should still run on every layer (lint, labeler) omit `needs: gate` and the `if:`.
 
