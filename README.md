@@ -9,7 +9,7 @@ This GitHub Action skips redundant CI on [GitHub's stacked pull requests](https:
 
 This action uses stack metadata so the jobs you gate run on the bottom of the remaining stack, and on the top if you leave that on. Mid-stack pull requests skip.
 
-## Quick start
+## Usage
 
 1. Trigger on all five `pull_request` types. GitHub's default omits `stacked` and `edited`. [Why those types](#pull_request-types)
 
@@ -41,9 +41,7 @@ needs: gate
 if: needs.gate.outputs.should-run == 'true'
 ```
 
-## Usage
-
-`@v1` tracks the latest 1.x. A version tag (`@v1.0.1`) or a commit SHA from the [Release](https://github.com/raulgg/stack-ci-gate/releases) stays on that tree. Do not pin `@main`.
+A complete workflow:
 
 ```yaml
 name: CI
@@ -65,12 +63,8 @@ jobs:
     outputs:
       should-run: ${{ steps.gate.outputs.should-run }}
     steps:
-      - name: Gate stacked CI
-        id: gate
+      - id: gate
         uses: raulgg/stack-ci-gate@v1
-        with:
-          bottom-n: 1
-          run-top: true
 
   test:
     needs: gate
@@ -81,71 +75,64 @@ jobs:
       - run: npm test
 ```
 
-The `gate` job lists its own `permissions`, so it keeps `contents: read` and `pull-requests: read` even if the workflow later grants write elsewhere. The example uses `pull_request`. `pull_request_target` would give this job the base repository token and secrets.
+Pin `@v1`. That tag tracks the latest 1.x. A version tag (`@v1.0.1`) or a commit SHA from the [Release](https://github.com/raulgg/stack-ci-gate/releases) stays on that tree. Do not pin `@main`.
+
+List `contents: read` and `pull-requests: read` on the `gate` job so they stay even if the workflow later grants write elsewhere. Use `pull_request`. `pull_request_target` would give this job the base repository token and secrets.
+
+If you use a merge queue, keep `merge_group` next to `pull_request`. The action sets `should-run` to `'true'` on it.
 
 Jobs that should still run on every layer (lint, labeler) omit `needs: gate` and the `if:`.
 
-Work that should run only on the remaining bottom, or only on the top, uses `is-bottom` or `is-top` in `if:`. Add those names to `jobs.gate.outputs` first, the same way as `should-run`.
+### Inputs
 
-## Inputs
+| Name           | Default               | Purpose                                                                 |
+| -------------- | --------------------- | ----------------------------------------------------------------------- |
+| `bottom-n`     | `1`                   | How many PRs at the remaining bottom always run.                        |
+| `run-top`      | `true`                | Also run the top PR (the full set of changes).                          |
+| `github-token` | `${{ github.token }}` | Reads stack membership. Needs `pull-requests: read` on the gate job.    |
+| `pr-number`    | event PR              | Override which PR to gate on `pull_request`. Leave unset in the recipe. |
 
-| Name           | Default               | Purpose                                                                                                                          |
-| -------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `bottom-n`     | `1`                   | How many PRs at the bottom of the **remaining** stack run CI.                                                                    |
-| `run-top`      | `true`                | Also run CI on the top PR of the stack.                                                                                          |
-| `github-token` | `${{ github.token }}` | Reads pull request and stack metadata. Needs `pull-requests: read`.                                                              |
-| `pr-number`    | event PR              | Override PR number on `pull_request`. Loads stack from the API; ignores the triggering event's `stack`. Ignored on other events. |
+### Outputs
 
-## Outputs
+All strings. Compare with `== 'true'` / `== 'false'`. Gate jobs with `should-run`. Use `is-bottom` or `is-top` when a job should run only there; add those names to `jobs.gate.outputs` first.
 
-All strings. Compare with `== 'true'` / `== 'false'`.
+| Name         | Meaning                                      |
+| ------------ | -------------------------------------------- |
+| `should-run` | `'true'` if the jobs you gated should run.   |
+| `reason`     | Why, also in the gate job log.               |
+| `is-stacked` | This PR is in a stack.                       |
+| `is-bottom`  | Remaining bottom (base is the stack base).   |
+| `is-top`     | Top of the stack.                            |
+| `position`   | Stack position, or empty.                    |
+| `size`       | Stack size, or empty.                        |
 
-| Name         | Meaning                                                                               |
-| ------------ | ------------------------------------------------------------------------------------- |
-| `should-run` | `'true'` means the jobs or steps you gated should run.                                |
-| `reason`     | Why, also printed in the gate job log.                                                |
-| `is-stacked` | A stack object was resolved.                                                          |
-| `is-bottom`  | This PR currently targets the stack base (`stack.base.ref == pull_request.base.ref`). |
-| `is-top`     | `stack.position == stack.size`.                                                       |
-| `position`   | Stack position, or empty.                                                             |
-| `size`       | Stack size, or empty.                                                                 |
+### How `should-run` is decided
 
-## How `should-run` is decided
+| When                                                                              | `should-run` |
+| --------------------------------------------------------------------------------- | ------------ |
+| Standalone PR, `merge_group`, `push`, `workflow_dispatch`                         | `'true'`     |
+| Remaining bottom (up to `bottom-n` open PRs from the current bottom)              | `'true'`     |
+| Top of the stack, if `run-top` is true                                            | `'true'`     |
+| Mid-stack, above `bottom-n`                                                       | `'false'`    |
+| Error, bad knobs, or unreadable stack                                             | `'true'`     |
 
-| Condition                                                                                       | `should-run`                      |
-| ----------------------------------------------------------------------------------------------- | --------------------------------- |
-| Not a `pull_request` / `pull_request_target` event (`workflow_dispatch`, `merge_group`, `push`) | `true`                            |
-| Error / API failure / unreadable stack                                                          | `true` (fail open)                |
-| Invalid input for `bottom-n` or `run-top`                                                       | `true` (fail open; logs an error) |
-| No stack after the event payload and API fallback                                               | `true` (standalone PR)            |
-| Lowest unmerged, and remaining depth ≤ `bottom-n`                                               | `true`                            |
-| Remaining depth ≤ `bottom-n`                                                                    | `true`                            |
-| `run-top` and this PR is top                                                                    | `true`                            |
-| Else (mid-stack, above `bottom-n`)                                                              | `false`                           |
+Remaining bottom is the PR whose base is the stack base. After a partial merge that is not `position == 1`. A 1-PR stack is both bottom and top.
 
-Lowest unmerged is not `position == 1`. GitHub documents `position == 1` as the original bottom of the stack object, which can disagree with the remaining bottom after a partial merge. This action uses `stack.base.ref == pull_request.base.ref`. For `bottom-n > 1` it lists the stack via `GET /repos/{owner}/{repo}/stacks/{number}` and counts **open** PRs from the bottom.
+The action never cancels the run. `merge_group` always runs.
 
-A 1-PR stack is both lowest and top; `should-run` is true.
+### `pull_request` types
 
-Network errors, unreadable payloads, invalid knobs, and unknown events run CI. The action never cancels the workflow run. It never skips `merge_group` (merge queue).
+The gate job only runs when the workflow starts. List every type this action needs:
 
-## `pull_request` types
+| Type | Why this action needs it |
+| ---- | ------------------------ |
+| `opened` | First run, including `gh stack submit`. |
+| `synchronize` | Pushes and rebases. |
+| `reopened` | The PR is opened again. |
+| `edited` | After a bottom merge, the next PR is retargeted at the stack base. That remaining bottom needs a run. |
+| `stacked` | `gh stack link` on PRs that already existed. |
 
-A `types` list replaces GitHub's default. Bare `on: pull_request` runs only for `opened`, `synchronize`, and `reopened`. The example also names `edited` and `stacked`, which sit outside that default.
-
-The action reads whichever event started the job. Leave a type off `on.pull_request.types` and GitHub never starts the workflow for that activity, so `should-run` is not recomputed.
-
-| Type | When it fires | Why the example includes it |
-| ---- | ------------- | --------------------------- |
-| `opened` | The pull request is created | First run. Payload has no `stack`. |
-| `synchronize` | New commits on the head branch | Pushes and rebases. Usually includes `stack`. |
-| `reopened` | A closed pull request is reopened | Fetches and retries if `stack` is missing. |
-| `edited` | Title, body, or base branch changed | Remaining-bottom retarget after a merge. |
-| `stacked` | The pull request joins a stack | `gh stack link` recomputes `should-run`. |
-
-`opened` never includes `stack`. On `opened` and `reopened`, if the payload has no `stack`, the action calls `GET /repos/{owner}/{repo}/pulls/{number}` and retries for a few seconds. If the pull request is still unstacked, it runs CI. That retry is what lets `gh stack submit` skip mid-stack on the first run. `stacked` runs again if the retry misses.
-
-Include `stacked` so `gh stack link` on already-open pull requests recomputes `should-run`. If link changes a base, GitHub also sends `edited`. The action GETs once with no retry and skips mid-stack only if that fetch, or the payload, already has `stack`. Linking by branch name can also send `synchronize`. Omit `stacked` and, when the bases were already a chain, those layers keep the checks from when they were standalone.
+GitHub's default is `opened`, `synchronize`, `reopened`. Without `edited`, a remaining-bottom retarget never starts the gate. Without `stacked`, linking already-open PRs never starts it.
 
 ## You might not need this action
 
