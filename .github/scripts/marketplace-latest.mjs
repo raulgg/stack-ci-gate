@@ -20,12 +20,24 @@ export function releaseEditUrl(repository, tag) {
   return `https://github.com/${repo}/releases/edit/${tag}`
 }
 
+const SCRIPT_TAG = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi
+const EMBEDDED_DATA = /\bdata-target\s*=\s*["']react-app\.embeddedData["']/i
+const MISSING_TAG = 'Marketplace listing HTML has no latestRelease.tagName'
+
 export function latestTagFromListing(html) {
-  const match = String(html).match(/"latestRelease":\{"tagName":"([^"]+)"/)
-  if (!match) {
-    throw new Error('Marketplace listing HTML has no latestRelease.tagName')
+  for (const match of String(html).matchAll(SCRIPT_TAG)) {
+    if (!EMBEDDED_DATA.test(match[1])) continue
+    let data
+    try {
+      data = JSON.parse(match[2])
+    } catch {
+      throw new Error(MISSING_TAG)
+    }
+    const tag = data?.payload?.releaseData?.latestRelease?.tagName
+    if (typeof tag !== 'string' || tag === '') throw new Error(MISSING_TAG)
+    return tag
   }
-  return match[1]
+  throw new Error(MISSING_TAG)
 }
 
 export function cmpSemver(left, right) {

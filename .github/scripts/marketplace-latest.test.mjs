@@ -8,11 +8,36 @@ import {
   releaseEditUrl,
 } from './marketplace-latest.mjs'
 
-const sample = '{"slug":"stack-ci-gate","latestRelease":{"tagName":"v1.0.1","name":"v1.0.1","isPrerelease":false}} uses: raulgg/stack-ci-gate@v1'
+function listingPage(body) {
+  return `<html><p>uses: raulgg/stack-ci-gate@v1</p><script type="application/json">{"latestRelease":{"tagName":"v9.9.9"}}</script>${body}</html>`
+}
 
-test('latestTagFromListing reads latestRelease.tagName, not README pins', () => {
-  assert.equal(latestTagFromListing(sample), 'v1.0.1')
-  assert.throws(() => latestTagFromListing('<html>no payload</html>'), /latestRelease/)
+test('latestTagFromListing reads embedded releaseData, not nearby tag names', () => {
+  const page = listingPage(`
+    <script data-target="react-app.embeddedData" type="application/json">
+      {
+        "payload": {
+          "releaseData": {
+            "latestRelease": {
+              "name": "v1.0.1",
+              "isPrerelease": false,
+              "tagName": "v1.0.1"
+            }
+          }
+        }
+      }
+    </script>`)
+  assert.equal(latestTagFromListing(page), 'v1.0.1')
+  assert.throws(() => latestTagFromListing(listingPage('')), /latestRelease/)
+  assert.throws(
+    () =>
+      latestTagFromListing(
+        listingPage(
+          '<script data-target="react-app.embeddedData" type="application/json">{"payload":{}}</script>',
+        ),
+      ),
+    /latestRelease/,
+  )
 })
 
 test('listingUrl uses the repo name as the Marketplace slug', () => {
