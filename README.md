@@ -61,6 +61,8 @@ Choose which jobs or steps skip on mid-stack pull requests. Decide from recent A
 Summarize what you gated, what still runs on every layer, and which mid-stack checks report Success without running.
 ```
 
+Install the skill with `npx skills add raulgg/stack-ci-gate`. Add `-g` to install it for every repo.
+
 ## Usage
 
 Pin a major tag (`@v1` in these examples). It moves with compatible releases. A version tag or a SHA from [Releases](https://github.com/raulgg/stack-ci-gate/releases) stays put. Do not pin `@main`.
