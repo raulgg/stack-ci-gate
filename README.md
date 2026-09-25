@@ -61,8 +61,6 @@ Choose which jobs or steps skip on mid-stack pull requests. Decide from recent A
 Summarize what you gated, what still runs on every layer, and which mid-stack checks report Success without running.
 ```
 
-Install the skill with `npx skills add raulgg/stack-ci-gate`. Add `-g` to install it for every repo.
-
 ## Usage
 
 Pin a major tag (`@v1` in these examples). It moves with compatible releases. A version tag or a SHA from [Releases](https://github.com/raulgg/stack-ci-gate/releases) stays put. Do not pin `@main`.
@@ -199,3 +197,13 @@ A workflow that never starts (path filters, `[skip ci]`, workflow-level `if:`) l
 [MIT](LICENSE)
 
 Inspired by [Graphite CI](https://github.com/withgraphite/graphite-ci-action).
+
+## Install the skill
+
+The skill is optional. Install it at project level, or globally, and an agent will set up this action when you use stacks. The jobs you gate run on the bottom of the remaining stack and on the top. On a smaller edit, or when you create, submit, link, rebase, or restack, the agent reminds you once. If it edits a workflow, it leaves that edit uncommitted.
+
+```bash
+npx skills add raulgg/stack-ci-gate
+```
+
+The command above installs the skill at project level. Add `-g` to install it globally (user-level) instead of project-level: `npx skills add raulgg/stack-ci-gate -g`.
