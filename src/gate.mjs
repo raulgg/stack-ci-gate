@@ -38,19 +38,13 @@ function safeText(text) {
   return oneLine(text).replaceAll('::', ': :').replaceAll('##[', '# [')
 }
 
-/**
- * unlabeled payloads can still list the label that was just removed.
- * A pr-number override gates a different pull request, so its event label stays out.
- */
-function labelNamesForDecision({ labels, action, changedLabel, useEventLabel }) {
-  const names = Array.isArray(labels) ? labels.slice() : []
-  if (!useEventLabel || typeof changedLabel !== 'string') return names
-  if (action === 'labeled') {
-    if (!names.includes(changedLabel)) names.push(changedLabel)
-    return names
-  }
-  if (action === 'unlabeled') return names.filter((name) => name !== changedLabel)
-  return names
+function applyLabelChange(names, action, label) {
+  const current = Array.isArray(names) ? names.slice() : []
+  if (typeof label !== 'string') return current
+  if (action === 'labeled' && !current.includes(label)) current.push(label)
+  // GitHub may still include the label this event just removed.
+  if (action === 'unlabeled') return current.filter((name) => name !== label)
+  return current
 }
 
 function writeOutputs(outputPath, result, log, trace = {}) {
@@ -125,12 +119,10 @@ export async function run(env = process.env, deps = {}) {
       bottomN,
     })
 
-    const labelNames = labelNamesForDecision({
-      labels: resolved.labels,
-      action: event.action,
-      changedLabel: event.label?.name,
-      useEventLabel: String(prNumberRaw ?? '').trim() === '',
-    })
+    const hasPrNumberOverride = String(prNumberRaw ?? '').trim() !== ''
+    const labelNames = hasPrNumberOverride
+      ? resolved.labels
+      : applyLabelChange(resolved.labels, event.action, event.label?.name)
 
     const result = decide({
       eventName,
