@@ -4,6 +4,8 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 
 ## Unreleased
 
+## 1.1.0 - 2026-10-01
+
 ### Added
 
 - Mid-stack pull requests run when they carry the force-run label (`force-run-label`, default `stack-ci:run`). The label only turns a skip into a run.
@@ -24,6 +26,7 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 - REST fallback on `opened` / `reopened` when `github.event.pull_request.stack` is missing.
 - Remaining-depth lookup via the Stacks API when `bottom-n > 1`.
 
-[Unreleased]: https://github.com/raulgg/stack-ci-gate/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/raulgg/stack-ci-gate/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/raulgg/stack-ci-gate/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/raulgg/stack-ci-gate/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/raulgg/stack-ci-gate/releases/tag/v1.0.0

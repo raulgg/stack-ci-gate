@@ -1,7 +1,7 @@
 {
   "name": "stack-ci-gate",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "A CI gate to optimize GitHub stacked PRs (gh stack). Stop rerunning CI on every layer of stacked pull requests.",
   "type": "module",
   "engines": {
