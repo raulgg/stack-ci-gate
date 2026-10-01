@@ -5,6 +5,7 @@ import {
   decide,
   failOpen,
   parseBottomN,
+  parseForceRunLabel,
   parseRunTop,
 } from './decide.mjs'
 import { resolveContext } from './github.mjs'
@@ -37,6 +38,21 @@ function safeText(text) {
   return oneLine(text).replaceAll('::', ': :').replaceAll('##[', '# [')
 }
 
+/**
+ * unlabeled payloads can still list the label that was just removed.
+ * A pr-number override gates a different pull request, so its event label stays out.
+ */
+function labelNamesForDecision({ labels, action, changedLabel, useEventLabel }) {
+  const names = Array.isArray(labels) ? labels.slice() : []
+  if (!useEventLabel || typeof changedLabel !== 'string') return names
+  if (action === 'labeled') {
+    if (!names.includes(changedLabel)) names.push(changedLabel)
+    return names
+  }
+  if (action === 'unlabeled') return names.filter((name) => name !== changedLabel)
+  return names
+}
+
 function writeOutputs(outputPath, result, log, trace = {}) {
   const reason = safeText(result.reason)
   appendOutput(outputPath, 'should-run', stringifyBool(result.should_run))
@@ -61,9 +77,11 @@ export async function run(env = process.env, deps = {}) {
 
   let bottomN
   let runTop
+  let forceRunLabel
   try {
     bottomN = parseBottomN(inputValue(env, 'bottom-n'))
     runTop = parseRunTop(inputValue(env, 'run-top'))
+    forceRunLabel = parseForceRunLabel(inputValue(env, 'force-run-label'))
   } catch (err) {
     if (err instanceof ConfigError) {
       log.error(`::error::${safeText(err.message)}`)
@@ -91,18 +109,27 @@ export async function run(env = process.env, deps = {}) {
 
     const event = readEvent(env.GITHUB_EVENT_PATH)
     const pr = event.pull_request ?? {}
+    const prNumberRaw = inputValue(env, 'pr-number')
     const resolved = await resolveContext({
       eventAction: event.action,
       eventStack: pr.stack,
       eventPrNumber: pr.number,
       eventPrBaseRef: pr.base?.ref,
-      prNumberOverride: inputValue(env, 'pr-number'),
+      eventLabels: pr.labels,
+      prNumberOverride: prNumberRaw,
       repo: env.GITHUB_REPOSITORY || '',
       token: inputValue(env, 'github-token') || env.GITHUB_TOKEN || '',
       apiUrl: env.GITHUB_API_URL || 'https://api.github.com',
       fetchImpl,
       sleep,
       bottomN,
+    })
+
+    const labelNames = labelNamesForDecision({
+      labels: resolved.labels,
+      action: event.action,
+      changedLabel: event.label?.name,
+      useEventLabel: String(prNumberRaw ?? '').trim() === '',
     })
 
     const result = decide({
@@ -112,6 +139,8 @@ export async function run(env = process.env, deps = {}) {
       stack: resolved.stack,
       prBaseRef: resolved.prBaseRef,
       remainingDepth: resolved.remainingDepth,
+      labelNames,
+      forceRunLabel,
     })
     write(result, {
       eventName,

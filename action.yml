@@ -14,6 +14,10 @@ inputs:
     description: Also run CI on the top PR of the stack
     required: false
     default: 'true'
+  force-run-label:
+    description: Pull request label that forces a mid-stack run. Empty disables it.
+    required: false
+    default: 'stack-ci:run'
   github-token:
     description: Token used to read pull request stack metadata
     required: false

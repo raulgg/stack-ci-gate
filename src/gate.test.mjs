@@ -503,3 +503,317 @@ test('writes every kebab-case output', async () => {
   assert.equal(out.size, '3')
   assert.ok(out.reason)
 })
+
+function midStackEvent({
+  action = 'synchronize',
+  labels,
+  label,
+  number = 11,
+  baseRef = 'feat/auth',
+  position = 2,
+  size = 3,
+} = {}) {
+  const payload = {
+    action,
+    pull_request: {
+      number,
+      base: { ref: baseRef },
+      stack: {
+        number: 50,
+        position,
+        size,
+        base: { ref: 'main' },
+      },
+    },
+  }
+  if (labels !== undefined) payload.pull_request.labels = labels
+  if (label !== undefined) payload.label = label
+  return payload
+}
+
+async function runPull(dir, payload, envExtra = {}, fetch) {
+  const event = writeEvent(dir, payload)
+  const env = baseEnv(dir, {
+    GITHUB_EVENT_NAME: 'pull_request',
+    GITHUB_EVENT_PATH: event,
+    ...envExtra,
+  })
+  const { result } = await run(env, { log: silent, fetch })
+  return { result, out: parseOutputs(env.GITHUB_OUTPUT), env }
+}
+
+function noFetch() {
+  const calls = []
+  const fetch = async (url) => {
+    calls.push(url)
+    throw new Error(`unexpected fetch ${url}`)
+  }
+  return { calls, fetch }
+}
+
+test('mid-stack force-run label runs without fetching', async () => {
+  const dir = tempDir()
+  const { calls, fetch } = noFetch()
+  const { result, out } = await runPull(
+    dir,
+    midStackEvent({ labels: [{ name: 'stack-ci:run' }] }),
+    {},
+    fetch,
+  )
+  assert.equal(calls.length, 0)
+  assert.equal(result.should_run, true)
+  assert.equal(result.is_bottom, false)
+  assert.equal(result.position, '2')
+  assert.equal(out['should-run'], 'true')
+  assert.equal(out.reason, 'force-run label stack-ci:run')
+})
+
+test('mid-stack with a different label skips without fetching', async () => {
+  const dir = tempDir()
+  const { calls, fetch } = noFetch()
+  const { result, out } = await runPull(
+    dir,
+    midStackEvent({ labels: [{ name: 'bug' }] }),
+    {},
+    fetch,
+  )
+  assert.equal(calls.length, 0)
+  assert.equal(result.should_run, false)
+  assert.match(result.reason, /middle of stack/)
+  assert.equal(out['should-run'], 'false')
+  assert.match(out.reason, /middle of stack/)
+})
+
+test('empty force-run-label disables force-run', async () => {
+  const dir = tempDir()
+  const { calls, fetch } = noFetch()
+  const { result, out } = await runPull(
+    dir,
+    midStackEvent({ labels: [{ name: 'stack-ci:run' }] }),
+    { 'INPUT_FORCE-RUN-LABEL': '' },
+    fetch,
+  )
+  assert.equal(calls.length, 0)
+  assert.equal(result.should_run, false)
+  assert.equal(out['should-run'], 'false')
+})
+
+test('custom force-run label name runs', async () => {
+  const dir = tempDir()
+  const { calls, fetch } = noFetch()
+  const { result, out } = await runPull(
+    dir,
+    midStackEvent({ labels: [{ name: 'ship-it' }] }),
+    { 'INPUT_FORCE-RUN-LABEL': 'ship-it' },
+    fetch,
+  )
+  assert.equal(calls.length, 0)
+  assert.equal(result.should_run, true)
+  assert.equal(out.reason, 'force-run label ship-it')
+})
+
+test('labeled event counts the added label when the array is empty', async () => {
+  const dir = tempDir()
+  const { calls, fetch } = noFetch()
+  const { result, out } = await runPull(
+    dir,
+    midStackEvent({
+      action: 'labeled',
+      labels: [],
+      label: { name: 'stack-ci:run' },
+    }),
+    {},
+    fetch,
+  )
+  assert.equal(calls.length, 0)
+  assert.equal(result.should_run, true)
+  assert.equal(out.reason, 'force-run label stack-ci:run')
+})
+
+test('unlabeled event drops the removed label still listed on the pull request', async () => {
+  const dir = tempDir()
+  const { calls, fetch } = noFetch()
+  const { result, out } = await runPull(
+    dir,
+    midStackEvent({
+      action: 'unlabeled',
+      labels: [{ name: 'stack-ci:run' }],
+      label: { name: 'stack-ci:run' },
+    }),
+    {},
+    fetch,
+  )
+  assert.equal(calls.length, 0)
+  assert.equal(result.should_run, false)
+  assert.match(out.reason, /middle of stack/)
+})
+
+test('unlabeled of another label keeps force-run', async () => {
+  const dir = tempDir()
+  const { calls, fetch } = noFetch()
+  const { result, out } = await runPull(
+    dir,
+    midStackEvent({
+      action: 'unlabeled',
+      labels: [{ name: 'stack-ci:run' }, { name: 'bug' }],
+      label: { name: 'bug' },
+    }),
+    {},
+    fetch,
+  )
+  assert.equal(calls.length, 0)
+  assert.equal(result.should_run, true)
+  assert.equal(out.reason, 'force-run label stack-ci:run')
+})
+
+test('pr-number override uses the fetched pull request labels', async () => {
+  const dir = tempDir()
+  const calls = []
+  const eventLabels = [{ name: 'stack-ci:run' }]
+  const { result, out } = await runPull(
+    dir,
+    {
+      action: 'synchronize',
+      pull_request: {
+        number: 10,
+        base: { ref: 'main' },
+        labels: eventLabels,
+        stack: {
+          number: 50,
+          position: 1,
+          size: 3,
+          base: { ref: 'main' },
+        },
+      },
+    },
+    { 'INPUT_PR-NUMBER': '12' },
+    async (url) => {
+      calls.push(url)
+      assert.match(url, /\/pulls\/12$/)
+      return jsonResponse({
+        number: 12,
+        base: { ref: 'feat/api' },
+        stack: {
+          number: 50,
+          position: 2,
+          size: 3,
+          base: { ref: 'main' },
+        },
+        labels: [{ name: 'bug' }],
+      })
+    },
+  )
+  assert.deepEqual(calls.map((url) => url.replace(/.*\/repos\/octo\/hello/, '')), ['/pulls/12'])
+  assert.equal(result.should_run, false)
+  assert.equal(out['should-run'], 'false')
+})
+
+test('pr-number override force-runs from the fetched labels', async () => {
+  const dir = tempDir()
+  const calls = []
+  const { result, out } = await runPull(
+    dir,
+    {
+      action: 'synchronize',
+      label: { name: 'bug' },
+      pull_request: {
+        number: 10,
+        base: { ref: 'main' },
+        labels: [{ name: 'bug' }],
+        stack: {
+          number: 50,
+          position: 1,
+          size: 3,
+          base: { ref: 'main' },
+        },
+      },
+    },
+    { 'INPUT_PR-NUMBER': '12' },
+    async (url) => {
+      calls.push(url)
+      return jsonResponse({
+        number: 12,
+        base: { ref: 'feat/api' },
+        stack: {
+          number: 50,
+          position: 2,
+          size: 3,
+          base: { ref: 'main' },
+        },
+        labels: [{ name: 'stack-ci:run' }],
+      })
+    },
+  )
+  assert.equal(calls.length, 1)
+  assert.match(calls[0], /\/pulls\/12$/)
+  assert.equal(result.should_run, true)
+  assert.equal(out.reason, 'force-run label stack-ci:run')
+})
+
+test('opened without event stack uses labels from the pull request fetch', async () => {
+  const dir = tempDir()
+  const calls = []
+  const { result } = await runPull(
+    dir,
+    {
+      action: 'opened',
+      pull_request: {
+        number: 11,
+        base: { ref: 'feat/auth' },
+      },
+    },
+    {},
+    async (url) => {
+      calls.push(url)
+      return jsonResponse({
+        number: 11,
+        base: { ref: 'feat/auth' },
+        stack: {
+          number: 50,
+          position: 2,
+          size: 3,
+          base: { ref: 'main' },
+        },
+        labels: [{ name: 'stack-ci:run' }],
+      })
+    },
+  )
+  assert.equal(calls.length, 1)
+  assert.match(calls[0], /\/pulls\/11$/)
+  assert.equal(result.should_run, true)
+  assert.equal(result.reason, 'force-run label stack-ci:run')
+})
+
+test('unknown depth fail-open keeps its reason when the force-run label is present', async () => {
+  const dir = tempDir()
+  const { result, out } = await runPull(
+    dir,
+    midStackEvent({
+      labels: [{ name: 'stack-ci:run' }],
+      number: 12,
+      position: 2,
+      size: 4,
+    }),
+    { 'INPUT_BOTTOM-N': '2' },
+    async () => jsonResponse({ message: 'nope' }, 500),
+  )
+  assert.equal(result.should_run, true)
+  assert.match(result.reason, /could not determine remaining stack depth/)
+  assert.doesNotMatch(result.reason, /force-run/)
+  assert.match(out.reason, /could not determine remaining stack depth/)
+  assert.doesNotMatch(out.reason, /force-run/)
+})
+
+test('force-run reason neutralizes workflow commands in the label name', async () => {
+  const dir = tempDir()
+  const { out, env } = await runPull(
+    dir,
+    midStackEvent({ labels: [{ name: 'bad::name' }] }),
+    { 'INPUT_FORCE-RUN-LABEL': 'bad::name' },
+    async () => {
+      throw new Error('no fetch')
+    },
+  )
+  assert.equal(out.reason, 'force-run label bad: :name')
+  assert.doesNotMatch(fs.readFileSync(env.GITHUB_OUTPUT, 'utf8'), /::/)
+})

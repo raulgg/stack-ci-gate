@@ -23,6 +23,16 @@ export function normalizeStack(stack) {
   return stack
 }
 
+/** null means the pull request had no labels array. [] means none were usable. */
+export function labelNamesFrom(labels) {
+  if (!Array.isArray(labels)) return null
+  const names = []
+  for (const label of labels) {
+    if (label && typeof label.name === 'string') names.push(label.name)
+  }
+  return names
+}
+
 async function githubGet(url, { token, fetchImpl, timeoutMs = FETCH_TIMEOUT_MS }) {
   const res = await fetchImpl(url, {
     headers: {
@@ -80,12 +90,15 @@ function shouldRetryForStack(eventAction) {
  * Event stack is missing on `opened` (PR is created, then stacked). Fetch the
  * PR resource, and retry briefly on opened/reopened. A pr_number override
  * always uses the API and ignores the triggering event's stack.
+ * Labels come from that same pull request: the event payload when its stack
+ * is used, otherwise the fetched body.
  */
 export async function resolvePull({
   eventAction,
   eventStack,
   eventPrNumber,
   eventPrBaseRef,
+  eventLabels,
   prNumberOverride,
   repo,
   token,
@@ -108,6 +121,7 @@ export async function resolvePull({
       prNumber,
       prBaseRef: eventPrBaseRef ?? '',
       stack: eventStackNorm,
+      labels: labelNamesFrom(eventLabels),
       source: 'event',
     }
   }
@@ -117,6 +131,7 @@ export async function resolvePull({
       prNumber: null,
       prBaseRef: eventPrBaseRef ?? '',
       stack: null,
+      labels: null,
       source: 'none',
     }
   }
@@ -126,6 +141,7 @@ export async function resolvePull({
       prNumber,
       prBaseRef: eventPrBaseRef ?? '',
       stack: null,
+      labels: null,
       source: 'no-token',
     }
   }
@@ -148,6 +164,7 @@ export async function resolvePull({
         prNumber: lastPr.number ?? prNumber,
         prBaseRef: lastPr.base?.ref ?? eventPrBaseRef ?? '',
         stack,
+        labels: labelNamesFrom(lastPr.labels),
         source: 'api',
       }
     }
@@ -157,6 +174,7 @@ export async function resolvePull({
     prNumber: lastPr?.number ?? prNumber,
     prBaseRef: lastPr?.base?.ref ?? eventPrBaseRef ?? '',
     stack: null,
+    labels: labelNamesFrom(lastPr?.labels),
     source: 'api',
   }
 }
@@ -170,6 +188,7 @@ export async function resolveContext({
   eventStack,
   eventPrNumber,
   eventPrBaseRef,
+  eventLabels,
   prNumberOverride,
   repo,
   token,
@@ -185,6 +204,7 @@ export async function resolveContext({
     eventStack,
     eventPrNumber,
     eventPrBaseRef,
+    eventLabels,
     prNumberOverride,
     repo,
     token,

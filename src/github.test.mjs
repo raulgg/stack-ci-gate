@@ -229,6 +229,105 @@ test('fetch abort becomes a thrown error', async () => {
   )
 })
 
+test('event stack returns label names and does not fetch', async () => {
+  let fetches = 0
+  const resolved = await resolvePull({
+    eventAction: 'synchronize',
+    eventStack: middleStack,
+    eventPrNumber: 42,
+    eventPrBaseRef: 'feat/auth',
+    eventLabels: [{ name: 'stack-ci:run' }, { color: 'red' }, null],
+    prNumberOverride: '',
+    repo: 'octo/hello',
+    token: 't',
+    fetchImpl: async () => {
+      fetches += 1
+      throw new Error('should not fetch')
+    },
+  })
+  assert.equal(fetches, 0)
+  assert.deepEqual(resolved.labels, ['stack-ci:run'])
+  assert.equal(resolved.source, 'event')
+})
+
+test('event stack with no labels array returns null and does not fetch', async () => {
+  let fetches = 0
+  const resolved = await resolvePull({
+    eventAction: 'synchronize',
+    eventStack: middleStack,
+    eventPrNumber: 42,
+    eventPrBaseRef: 'feat/auth',
+    repo: 'octo/hello',
+    token: 't',
+    fetchImpl: async () => {
+      fetches += 1
+      throw new Error('should not fetch')
+    },
+  })
+  assert.equal(fetches, 0)
+  assert.equal(resolved.labels, null)
+})
+
+test('opened retry uses labels from the response that includes the stack', async () => {
+  let calls = 0
+  const resolved = await resolvePull({
+    eventAction: 'opened',
+    eventStack: null,
+    eventPrNumber: 42,
+    eventPrBaseRef: 'feat/auth',
+    eventLabels: [{ name: 'from-event' }],
+    repo: 'octo/hello',
+    token: 't',
+    retryDelaysMs: [0, 10, 20],
+    sleep: async () => {},
+    fetchImpl: async () => {
+      calls += 1
+      if (calls < 3) {
+        return jsonResponse({
+          number: 42,
+          base: { ref: 'feat/auth' },
+          stack: null,
+          labels: [{ name: 'bug' }],
+        })
+      }
+      return jsonResponse({
+        number: 42,
+        base: { ref: 'feat/auth' },
+        stack: middleStack,
+        labels: [{ name: 'stack-ci:run' }],
+      })
+    },
+  })
+  assert.equal(calls, 3)
+  assert.deepEqual(resolved.labels, ['stack-ci:run'])
+  assert.equal(resolved.stack.position, 2)
+})
+
+test('pr_number override returns API labels, not event labels', async () => {
+  const resolved = await resolvePull({
+    eventAction: 'synchronize',
+    eventStack: middleStack,
+    eventPrNumber: 10,
+    eventPrBaseRef: 'main',
+    eventLabels: [{ name: 'stack-ci:run' }],
+    prNumberOverride: '11',
+    repo: 'octo/hello',
+    token: 't',
+    fetchImpl: async (url) => {
+      assert.match(url, /\/pulls\/11$/)
+      return jsonResponse({
+        number: 11,
+        base: { ref: 'feat/auth' },
+        stack: middleStack,
+        labels: [{ name: 'bug' }],
+      })
+    },
+  })
+  assert.deepEqual(resolved.labels, ['bug'])
+  assert.equal(resolved.prNumber, 11)
+  assert.equal(resolved.source, 'api')
+})
+
 test('API failure propagates so the gate can fail open', async () => {
   await assert.rejects(
     () =>

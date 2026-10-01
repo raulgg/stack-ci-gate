@@ -4,6 +4,10 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 
 ## Unreleased
 
+### Added
+
+- Mid-stack pull requests run when they carry the force-run label (`force-run-label`, default `stack-ci:run`). The label only turns a skip into a run.
+
 ## 1.0.1 - 2026-09-21
 
 ### Changed

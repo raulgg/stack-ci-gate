@@ -4,6 +4,7 @@ import {
   ConfigError,
   decide,
   parseBottomN,
+  parseForceRunLabel,
   parseRunTop,
 } from './decide.mjs'
 
@@ -223,4 +224,186 @@ test('parseRunTop accepts booleans and empty default', () => {
   assert.equal(parseRunTop('true'), true)
   assert.equal(parseRunTop('FALSE'), false)
   assert.throws(() => parseRunTop('yes'), ConfigError)
+})
+
+const force = {
+  labelNames: ['stack-ci:run'],
+  forceRunLabel: 'stack-ci:run',
+}
+const FORCE_REASON = 'force-run label stack-ci:run'
+
+function midStack(extra = {}) {
+  return {
+    ...defaults,
+    stack: stackOf({ position: 2, size: 3 }),
+    prBaseRef: 'feat/auth',
+    ...extra,
+  }
+}
+
+test('mid-stack without labels still skips', () => {
+  const result = decide(midStack())
+  assert.equal(result.should_run, false)
+  assert.match(result.reason, /middle of stack/)
+})
+
+test('mid-stack with a different label still skips', () => {
+  const result = decide(midStack({ labelNames: ['bug'], forceRunLabel: 'stack-ci:run' }))
+  assert.equal(result.should_run, false)
+  assert.match(result.reason, /middle of stack/)
+})
+
+test('mid-stack with the force-run label runs and names the label', () => {
+  const result = decide(midStack(force))
+  assert.equal(result.should_run, true)
+  assert.equal(result.reason, FORCE_REASON)
+  assert.equal(result.is_bottom, false)
+  assert.equal(result.position, '2')
+})
+
+test('force-run matches when the label is one of several', () => {
+  const result = decide(
+    midStack({ labelNames: ['bug', 'stack-ci:run'], forceRunLabel: 'stack-ci:run' }),
+  )
+  assert.equal(result.should_run, true)
+  assert.equal(result.reason, FORCE_REASON)
+})
+
+test('empty force-run label disables the feature', () => {
+  const result = decide(midStack({ labelNames: ['stack-ci:run'], forceRunLabel: '' }))
+  assert.equal(result.should_run, false)
+  assert.match(result.reason, /middle of stack/)
+})
+
+test('force-run label match is case-sensitive', () => {
+  const result = decide(
+    midStack({ labelNames: ['Stack-CI:Run'], forceRunLabel: 'stack-ci:run' }),
+  )
+  assert.equal(result.should_run, false)
+  assert.match(result.reason, /middle of stack/)
+})
+
+test('remaining bottom keeps its reason when the force-run label is present', () => {
+  const result = decide({
+    ...defaults,
+    ...force,
+    stack: stackOf({ position: 2, size: 3 }),
+    prBaseRef: 'main',
+  })
+  assert.equal(result.should_run, true)
+  assert.match(result.reason, /lowest unmerged/)
+  assert.doesNotMatch(result.reason, /force-run/)
+})
+
+test('top keeps its reason when the force-run label is present', () => {
+  const result = decide({
+    ...defaults,
+    ...force,
+    stack: stackOf({ position: 3, size: 3 }),
+    prBaseRef: 'feat/api',
+  })
+  assert.equal(result.should_run, true)
+  assert.match(result.reason, /top of stack/)
+  assert.doesNotMatch(result.reason, /force-run/)
+})
+
+test('top with run-top false runs because of the force-run label', () => {
+  const result = decide({
+    ...defaults,
+    ...force,
+    runTop: false,
+    stack: stackOf({ position: 3, size: 3 }),
+    prBaseRef: 'feat/api',
+  })
+  assert.equal(result.should_run, true)
+  assert.equal(result.reason, FORCE_REASON)
+  assert.equal(result.is_top, true)
+  assert.equal(result.is_bottom, false)
+})
+
+test('bottom-n match keeps the remaining-depth reason when the label is present', () => {
+  const result = decide({
+    ...defaults,
+    ...force,
+    bottomN: 2,
+    stack: stackOf({ position: 2, size: 4 }),
+    prBaseRef: 'feat/auth',
+    remainingDepth: 2,
+  })
+  assert.equal(result.should_run, true)
+  assert.match(result.reason, /remaining depth 2 is within bottom-n=2/)
+  assert.doesNotMatch(result.reason, /force-run/)
+})
+
+test('unknown remaining depth keeps the fail-open reason when the label is present', () => {
+  const result = decide({
+    ...defaults,
+    ...force,
+    bottomN: 2,
+    stack: stackOf({ position: 2, size: 4 }),
+    prBaseRef: 'feat/auth',
+    remainingDepth: null,
+  })
+  assert.equal(result.should_run, true)
+  assert.match(result.reason, /could not determine remaining stack depth/)
+  assert.doesNotMatch(result.reason, /force-run/)
+})
+
+test('standalone keeps its reason when the force-run label is present', () => {
+  const result = decide({
+    ...defaults,
+    ...force,
+    stack: null,
+    prBaseRef: 'main',
+  })
+  assert.equal(result.should_run, true)
+  assert.match(result.reason, /not in a stack/)
+  assert.doesNotMatch(result.reason, /force-run/)
+})
+
+test('invalid stack keeps its reason when the force-run label is present', () => {
+  const result = decide({
+    ...defaults,
+    ...force,
+    stack: { position: 'nope', size: 3, base: { ref: 'main' } },
+    prBaseRef: 'main',
+  })
+  assert.equal(result.should_run, true)
+  assert.match(result.reason, /invalid stack metadata/)
+  assert.doesNotMatch(result.reason, /force-run/)
+})
+
+test('merge_group ignores the force-run label', () => {
+  const result = decide({
+    eventName: 'merge_group',
+    bottomN: 1,
+    runTop: true,
+    stack: stackOf({ position: 2, size: 3 }),
+    prBaseRef: 'feat/auth',
+    ...force,
+  })
+  assert.equal(result.should_run, true)
+  assert.match(result.reason, /not a pull_request event/)
+  assert.doesNotMatch(result.reason, /force-run/)
+})
+
+test('pull_request_target mid-stack force-runs on the label', () => {
+  const result = decide({
+    eventName: 'pull_request_target',
+    bottomN: 1,
+    runTop: true,
+    stack: stackOf({ position: 2, size: 3 }),
+    prBaseRef: 'feat/auth',
+    ...force,
+  })
+  assert.equal(result.should_run, true)
+  assert.equal(result.reason, FORCE_REASON)
+})
+
+test('parseForceRunLabel defaults when missing and disables on empty', () => {
+  assert.equal(parseForceRunLabel(undefined), 'stack-ci:run')
+  assert.equal(parseForceRunLabel(null), 'stack-ci:run')
+  assert.equal(parseForceRunLabel(''), '')
+  assert.equal(parseForceRunLabel('   '), '')
+  assert.equal(parseForceRunLabel('  ship it  '), 'ship it')
 })

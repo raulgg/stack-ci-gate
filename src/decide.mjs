@@ -26,6 +26,12 @@ export function parseRunTop(raw) {
   throw new ConfigError(`run-top must be true or false, got ${JSON.stringify(raw)}`)
 }
 
+/** Empty string disables force-run. A missing input keeps the action default. */
+export function parseForceRunLabel(raw) {
+  if (raw == null) return 'stack-ci:run'
+  return String(raw).trim()
+}
+
 export function isLowestUnmerged(stack, prBaseRef) {
   const stackBase = stack?.base?.ref
   return Boolean(stackBase && prBaseRef && stackBase === prBaseRef)
@@ -87,6 +93,9 @@ function diagnostics(stack, prBaseRef) {
 /**
  * Pure should_run decision. remainingDepth is the 1-based index of this PR
  * among unmerged PRs, counting from the current lowest. Pass null when unknown.
+ * labelNames are the PR's label names. forceRunLabel is the configured name,
+ * or '' when force-run is disabled. A match runs only when this layer would
+ * otherwise skip.
  */
 export function decide({
   eventName,
@@ -95,6 +104,8 @@ export function decide({
   stack,
   prBaseRef,
   remainingDepth = null,
+  labelNames = [],
+  forceRunLabel = '',
 }) {
   if (!PR_EVENTS.has(eventName)) {
     return failOpen(`not a pull_request event (${eventName}); running CI`)
@@ -137,6 +148,18 @@ export function decide({
     return {
       should_run: true,
       reason: 'could not determine remaining stack depth; running CI',
+      ...diag,
+    }
+  }
+
+  if (
+    forceRunLabel !== '' &&
+    Array.isArray(labelNames) &&
+    labelNames.includes(forceRunLabel)
+  ) {
+    return {
+      should_run: true,
+      reason: `force-run label ${forceRunLabel}`,
       ...diag,
     }
   }

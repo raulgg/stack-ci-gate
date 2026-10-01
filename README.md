@@ -17,12 +17,12 @@ This action uses stack metadata so the jobs you gate run on the bottom of the re
 
 ## Quick start
 
-1. Trigger on all five `pull_request` types. GitHub's default omits `stacked` and `edited`. [Why those types](#pull_request-types)
+1. Trigger on all seven `pull_request` types. GitHub's default omits `stacked`, `edited`, `labeled`, and `unlabeled`. [Why those types](#pull_request-types)
 
 ```yaml
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited, stacked]
+    types: [opened, synchronize, reopened, edited, stacked, labeled, unlabeled]
 ```
 
 2. Add a `gate` job that always runs and lists `pull-requests: read`. The restricted token default is only `contents` and `packages`.
@@ -72,7 +72,7 @@ name: CI
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited, stacked]
+    types: [opened, synchronize, reopened, edited, stacked, labeled, unlabeled]
   merge_group:
 
 permissions:
@@ -103,12 +103,13 @@ Jobs that should still run on every layer, such as lint or labeler, omit `needs:
 
 ### Inputs
 
-| Name           | Default               | Purpose                                                                 |
-| -------------- | --------------------- | ----------------------------------------------------------------------- |
-| `bottom-n`     | `1`                   | How many PRs at the remaining bottom always run.                        |
-| `run-top`      | `true`                | Also run the top PR (the full set of changes).                          |
-| `github-token` | `${{ github.token }}` | Reads stack membership. Needs `pull-requests: read` on the gate job.    |
-| `pr-number`    | event PR              | Override which PR to gate on `pull_request`. Leave unset in the recipe. |
+| Name               | Default               | Purpose                                                                          |
+| ------------------ | --------------------- | -------------------------------------------------------------------------------- |
+| `bottom-n`         | `1`                   | How many PRs at the remaining bottom always run.                                 |
+| `run-top`          | `true`                | Also run the top PR (the full set of changes).                                   |
+| `force-run-label`  | `stack-ci:run`        | Label that forces a mid-stack run. Create it in the repo. Empty disables.       |
+| `github-token`     | `${{ github.token }}` | Reads stack membership. Needs `pull-requests: read` on the gate job.            |
+| `pr-number`        | event PR              | Override which PR to gate on `pull_request`. Leave unset in the recipe.         |
 
 ### Outputs
 
@@ -131,10 +132,13 @@ All outputs are strings. Compare them with `== 'true'` or `== 'false'`. Gate job
 | Standalone PR, `merge_group`, `push`, `workflow_dispatch`                         | `'true'`     |
 | Remaining bottom (up to `bottom-n` open PRs from the current bottom)              | `'true'`     |
 | Top of the stack, if `run-top` is true                                            | `'true'`     |
-| Mid-stack, above `bottom-n`                                                       | `'false'`    |
+| Mid-stack, above `bottom-n`, with the force-run label                             | `'true'`     |
+| Mid-stack, above `bottom-n`, without the force-run label                          | `'false'`    |
 | Error, bad knobs, or unreadable stack                                             | `'true'`     |
 
 Remaining bottom is the PR whose base is the stack base. After a partial merge, remaining bottom is not `position == 1`. A 1-PR stack is both bottom and top.
+
+The label stays until someone removes it, and it can only turn a skip into a run.
 
 The action never cancels the run. `merge_group` always runs.
 
@@ -149,8 +153,10 @@ The gate job only runs when the workflow starts. List every type this action nee
 | `reopened` | The PR is opened again. |
 | `edited` | After a bottom merge, the next PR is retargeted at the stack base. That remaining bottom needs a run. |
 | `stacked` | `gh stack link` on PRs that already existed. |
+| `labeled` | Any added label starts a run. Only the force-run label turns a skip into a run. |
+| `unlabeled` | Any removed label starts a run. Removing the force-run label skips this layer again. |
 
-GitHub's default is `opened`, `synchronize`, `reopened`. Without `edited`, a remaining-bottom retarget never starts the gate. Without `stacked`, linking already-open PRs never starts it.
+GitHub's default is `opened`, `synchronize`, `reopened`. Without `edited`, a remaining-bottom retarget never starts the gate. Without `stacked`, linking already-open PRs never starts it. A workflow that leaves out `labeled` and `unlabeled` still force-runs on the next push while the label is on the pull request.
 
 ## You might not need this action
 
