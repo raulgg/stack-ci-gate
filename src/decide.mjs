@@ -26,7 +26,7 @@ export function parseRunTop(raw) {
   throw new ConfigError(`run-top must be true or false, got ${JSON.stringify(raw)}`)
 }
 
-/** Empty string disables force-run. A missing input keeps the action default. */
+/** Blank input disables force-run. A missing input keeps the action default. */
 export function parseForceRunLabel(raw) {
   if (raw == null) return 'stack-ci:run'
   return String(raw).trim()
@@ -71,6 +71,14 @@ export function failOpen(reason, extras = {}) {
   }
 }
 
+function hasForceRunLabel(labelNames, forceRunLabel) {
+  return (
+    forceRunLabel !== '' &&
+    Array.isArray(labelNames) &&
+    labelNames.includes(forceRunLabel)
+  )
+}
+
 function diagnostics(stack, prBaseRef) {
   if (!stackLooksValid(stack)) {
     return {
@@ -93,9 +101,7 @@ function diagnostics(stack, prBaseRef) {
 /**
  * Pure should_run decision. remainingDepth is the 1-based index of this PR
  * among unmerged PRs, counting from the current lowest. Pass null when unknown.
- * labelNames are the PR's label names. forceRunLabel is the configured name,
- * or '' when force-run is disabled. A match runs only when this layer would
- * otherwise skip.
+ * The force-run label is checked only after the layers that already run.
  */
 export function decide({
   eventName,
@@ -152,11 +158,7 @@ export function decide({
     }
   }
 
-  if (
-    forceRunLabel !== '' &&
-    Array.isArray(labelNames) &&
-    labelNames.includes(forceRunLabel)
-  ) {
+  if (hasForceRunLabel(labelNames, forceRunLabel)) {
     return {
       should_run: true,
       reason: `force-run label ${forceRunLabel}`,

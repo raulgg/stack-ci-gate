@@ -41,7 +41,9 @@ function safeText(text) {
 function applyLabelChange(names, action, label) {
   const current = Array.isArray(names) ? names.slice() : []
   if (typeof label !== 'string') return current
-  if (action === 'labeled' && !current.includes(label)) current.push(label)
+  if (action === 'labeled') {
+    return current.includes(label) ? current : [...current, label]
+  }
   // GitHub may still include the label this event just removed.
   if (action === 'unlabeled') return current.filter((name) => name !== label)
   return current

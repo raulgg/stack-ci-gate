@@ -23,9 +23,8 @@ export function normalizeStack(stack) {
   return stack
 }
 
-/** null means the pull request had no labels array. [] means none were usable. */
 export function labelNamesFrom(labels) {
-  if (!Array.isArray(labels)) return null
+  if (!Array.isArray(labels)) return []
   const names = []
   for (const label of labels) {
     if (label && typeof label.name === 'string') names.push(label.name)
@@ -131,7 +130,7 @@ export async function resolvePull({
       prNumber: null,
       prBaseRef: eventPrBaseRef ?? '',
       stack: null,
-      labels: null,
+      labels: [],
       source: 'none',
     }
   }
@@ -141,7 +140,7 @@ export async function resolvePull({
       prNumber,
       prBaseRef: eventPrBaseRef ?? '',
       stack: null,
-      labels: null,
+      labels: [],
       source: 'no-token',
     }
   }

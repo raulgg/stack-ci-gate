@@ -250,7 +250,7 @@ test('event stack returns label names and does not fetch', async () => {
   assert.equal(resolved.source, 'event')
 })
 
-test('event stack with no labels array returns null and does not fetch', async () => {
+test('event stack with no labels array returns no names and does not fetch', async () => {
   let fetches = 0
   const resolved = await resolvePull({
     eventAction: 'synchronize',
@@ -265,7 +265,7 @@ test('event stack with no labels array returns null and does not fetch', async (
     },
   })
   assert.equal(fetches, 0)
-  assert.equal(resolved.labels, null)
+  assert.deepEqual(resolved.labels, [])
 })
 
 test('opened retry uses labels from the response that includes the stack', async () => {
