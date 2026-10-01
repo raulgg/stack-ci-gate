@@ -1,0 +1,50 @@
+name: Force-run check
+
+# Temporary. Watches the force-run label on this stack. Delete with the upper branches.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, stacked, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      should-run: ${{ steps.gate.outputs.should-run }}
+      reason: ${{ steps.gate.outputs.reason }}
+      is-stacked: ${{ steps.gate.outputs.is-stacked }}
+      is-bottom: ${{ steps.gate.outputs.is-bottom }}
+      is-top: ${{ steps.gate.outputs.is-top }}
+      position: ${{ steps.gate.outputs.position }}
+      size: ${{ steps.gate.outputs.size }}
+    steps:
+      # uses: ./ needs the repo on disk. Published tags do not.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./
+        id: gate
+      - name: Show gate outputs
+        env:
+          EVENT_ACTION: ${{ github.event.action }}
+          SHOULD_RUN: ${{ steps.gate.outputs.should-run }}
+          REASON: ${{ steps.gate.outputs.reason }}
+          IS_STACKED: ${{ steps.gate.outputs.is-stacked }}
+          IS_BOTTOM: ${{ steps.gate.outputs.is-bottom }}
+          IS_TOP: ${{ steps.gate.outputs.is-top }}
+          POSITION: ${{ steps.gate.outputs.position }}
+          SIZE: ${{ steps.gate.outputs.size }}
+        run: |
+          echo "event_action=$EVENT_ACTION"
+          echo "should-run=$SHOULD_RUN"
+          echo "reason=$REASON"
+          echo "is-stacked=$IS_STACKED"
+          echo "is-bottom=$IS_BOTTOM"
+          echo "is-top=$IS_TOP"
+          echo "position=$POSITION"
+          echo "size=$SIZE"
+          test -n "$SHOULD_RUN"
