@@ -64,9 +64,9 @@ Suggest. Make the workflow edit this task asked for. If this conversation has al
 
 Asked and Rewrite run this on each pull request workflow they gate.
 
-If `pull_request` has no `types` list, set it to `opened`, `synchronize`, `reopened`, `edited`, `stacked`, `labeled`, and `unlabeled`. If it has a list, add any of those seven that are missing. Keep every other trigger, type, branch filter, and path filter.
+If `pull_request` has no `types` list, set it to `opened`, `synchronize`, `reopened`, `edited`, `stacked`, and `labeled`. If it has a list, add any of those six that are missing. Keep every other trigger, type, branch filter, and path filter.
 
-Add `labeled` and `unlabeled` too: a `stack-ci:run` label then forces a mid-stack run without a push, and it stays until someone removes it.
+`labeled` lets a `stack-ci:run` label force a mid-stack run without a push. Leave `labeled` out when this workflow will not use the force-run label.
 
 Add this job when the file has none yet. The step id stays `gate`. When a job id `gate` already exists, name this job `stack-gate`. Use that id in `needs` and `if`.
 
@@ -95,4 +95,4 @@ When a job that runs on every layer `needs` a job you are about to gate, leave t
 
 Add the types, the gate job, and those `needs` and `if` lines. Leave every other key as it was.
 
-You are done when each edited file has the seven types, one gate job in that shape, and each chosen job or step compares `should-run` to `'true'`. In the reply, name what you gated, what still runs on every layer, and which gated checks a mid-stack pull request will report as Success without running.
+You are done when each edited file has `opened`, `synchronize`, `reopened`, `edited`, and `stacked`, has `labeled` unless this workflow will not use the force-run label, has one gate job in that shape, and each chosen job or step compares `should-run` to `'true'`. In the reply, name what you gated, what still runs on every layer, and which gated checks a mid-stack pull request will report as Success without running.

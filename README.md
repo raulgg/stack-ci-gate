@@ -17,12 +17,12 @@ This action uses stack metadata so the jobs you gate run on the bottom of the re
 
 ## Quick start
 
-1. Trigger on all seven `pull_request` types. GitHub's default omits `stacked`, `edited`, `labeled`, and `unlabeled`. [Why those types](#pull_request-types)
+1. Trigger on all six `pull_request` types. GitHub's default omits `stacked`, `edited`, and `labeled`. [Why those types](#pull_request-types)
 
 ```yaml
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited, stacked, labeled, unlabeled]
+    types: [opened, synchronize, reopened, edited, stacked, labeled]
 ```
 
 2. Add a `gate` job that always runs and lists `pull-requests: read`. The restricted token default is only `contents` and `packages`.
@@ -72,7 +72,7 @@ name: CI
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited, stacked, labeled, unlabeled]
+    types: [opened, synchronize, reopened, edited, stacked, labeled]
   merge_group:
 
 permissions:
@@ -153,10 +153,9 @@ The gate job only runs when the workflow starts. List every type this action nee
 | `reopened` | The PR is opened again. |
 | `edited` | After a bottom merge, the next PR is retargeted at the stack base. That remaining bottom needs a run. |
 | `stacked` | `gh stack link` on PRs that already existed. |
-| `labeled` | Any added label starts a run. Only the force-run label turns a skip into a run. |
-| `unlabeled` | Any removed label starts a run. Removing the force-run label skips this layer again. |
+| `labeled` | Force-run without a push. Any added label starts a run. Only the force-run label turns a skip into a run. Leave this type out when you will not use the force-run label. |
 
-GitHub's default is `opened`, `synchronize`, `reopened`. Without `edited`, a remaining-bottom retarget never starts the gate. Without `stacked`, linking already-open PRs never starts it. A workflow that leaves out `labeled` and `unlabeled` still force-runs on the next push while the label is on the pull request.
+GitHub's default is `opened`, `synchronize`, `reopened`. Without `edited`, a remaining-bottom retarget never starts the gate. Without `stacked`, linking already-open PRs never starts it. A workflow that leaves out `labeled` still force-runs on the next push while the label is on the pull request.
 
 ## You might not need this action
 
