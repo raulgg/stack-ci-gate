@@ -142,6 +142,8 @@ Remaining bottom is the PR whose base is the stack base. After a partial merge, 
 
 The gate step writes a job summary with the decision and, when known, the remaining depth and the remaining-bottom and top pull request numbers.
 
+When CI runs only because the gate could not decide, such as a missing `pull-requests: read`, the step adds a warning annotation and an `Action needed` section to the job summary with the cause and the fix. A failed stack lookup that did not change the decision appears only in the log and the summary.
+
 The label stays until someone removes it, and it can only turn a skip into a run.
 
 The action never cancels the run. `merge_group` always runs.

@@ -8,6 +8,16 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 
 - Remaining depth is resolved for every stacked pull request. The `remaining-depth` output is that index, or empty when it is unknown.
 - The gate step writes a job summary with the decision and, when known, the remaining depth and the pull requests where gated CI runs.
+- When CI runs only because the gate could not decide, the gate step adds a warning annotation and an `Action needed` job summary section with the cause and the fix.
+
+### Changed
+
+- A failed output write is now an error annotation, because gated jobs may skip without `should-run`.
+
+### Fixed
+
+- A missing token or a non-numeric `pr-number` no longer reports `not in a stack`.
+- `reason` names the failed lookup when remaining depth is unknown with `bottom-n` above 1.
 
 ## 1.1.0 - 2026-10-01
 

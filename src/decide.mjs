@@ -102,6 +102,8 @@ function diagnostics(stack, prBaseRef) {
  * Pure should_run decision. remainingDepth is the 1-based index of this PR
  * among unmerged PRs, counting from the current lowest. Pass null when unknown.
  * The force-run label is checked only after the layers that already run.
+ * lookupProblem says why stack data is missing. degraded marks a result that
+ * runs CI only because the gate could not decide.
  */
 export function decide({
   eventName,
@@ -112,12 +114,18 @@ export function decide({
   remainingDepth = null,
   labelNames = [],
   forceRunLabel = '',
+  lookupProblem = '',
 }) {
   if (!PR_EVENTS.has(eventName)) {
     return failOpen(`not a pull_request event (${eventName}); running CI`)
   }
 
   if (stack == null) {
+    if (lookupProblem) {
+      return failOpen(`could not read the stack; running CI (${lookupProblem})`, {
+        degraded: true,
+      })
+    }
     return failOpen('not in a stack; running CI')
   }
 
@@ -127,6 +135,7 @@ export function decide({
     return {
       should_run: true,
       reason: 'invalid stack metadata; running CI',
+      degraded: true,
       ...diag,
     }
   }
@@ -151,9 +160,11 @@ export function decide({
   }
 
   if (bottomN > 1 && (depth == null || !Number.isFinite(depth))) {
+    const cause = lookupProblem ? ` (${lookupProblem})` : ''
     return {
       should_run: true,
-      reason: 'could not determine remaining stack depth; running CI',
+      reason: `could not determine remaining stack depth; running CI${cause}`,
+      degraded: true,
       ...diag,
     }
   }
