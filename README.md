@@ -86,6 +86,7 @@ jobs:
       pull-requests: read
     outputs:
       should-run: ${{ steps.gate.outputs.should-run }}
+      remaining-depth: ${{ steps.gate.outputs.remaining-depth }}
     steps:
       - id: gate
         uses: raulgg/stack-ci-gate@v1
@@ -115,15 +116,16 @@ Jobs that should still run on every layer, such as lint or labeler, omit `needs:
 
 All outputs are strings. Compare them with `== 'true'` or `== 'false'`. Gate jobs with `should-run`. Use `is-bottom` or `is-top` when a job should run only there, and add those names to `jobs.gate.outputs` first.
 
-| Name         | Meaning                                      |
-| ------------ | -------------------------------------------- |
-| `should-run` | `'true'` if the jobs you gated should run.   |
-| `reason`     | Why, also in the gate job log.               |
-| `is-stacked` | This PR is in a stack.                       |
-| `is-bottom`  | Remaining bottom (base is the stack base).   |
-| `is-top`     | Top of the stack.                            |
-| `position`   | Stack position, or empty.                    |
-| `size`       | Stack size, or empty.                        |
+| Name              | Meaning                                                           |
+| ----------------- | ----------------------------------------------------------------- |
+| `should-run`      | `'true'` if the jobs you gated should run.                        |
+| `reason`          | Why, also in the gate job log.                                    |
+| `is-stacked`      | This PR is in a stack.                                            |
+| `is-bottom`       | Remaining bottom (base is the stack base).                        |
+| `is-top`          | Top of the stack.                                                 |
+| `position`        | Stack position, or empty.                                         |
+| `size`            | Stack size, or empty.                                             |
+| `remaining-depth` | Remaining unmerged index from the bottom, or empty when unknown. |
 
 ### How `should-run` is decided
 
@@ -137,6 +139,8 @@ All outputs are strings. Compare them with `== 'true'` or `== 'false'`. Gate job
 | Error, bad knobs, or unreadable stack                                             | `'true'`     |
 
 Remaining bottom is the PR whose base is the stack base. After a partial merge, remaining bottom is not `position == 1`. A 1-PR stack is both bottom and top.
+
+The gate step writes a job summary with the decision and, when known, the remaining depth and the remaining-bottom and top pull request numbers.
 
 The label stays until someone removes it, and it can only turn a skip into a run.
 

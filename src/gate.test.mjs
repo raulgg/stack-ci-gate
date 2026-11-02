@@ -306,9 +306,21 @@ test('pr_number override ignores triggering event stack', async () => {
     GITHUB_EVENT_PATH: event,
     'INPUT_PR-NUMBER': '12',
   })
+  const urls = []
   const { result } = await run(env, {
     log: silent,
     fetch: async (url) => {
+      urls.push(String(url))
+      if (/\/stacks\/50$/.test(url)) {
+        return jsonResponse({
+          number: 50,
+          pull_requests: [
+            { number: 10, state: 'open' },
+            { number: 12, state: 'open' },
+            { number: 13, state: 'open' },
+          ],
+        })
+      }
       assert.match(url, /\/pulls\/12$/)
       return jsonResponse({
         number: 12,
@@ -322,6 +334,10 @@ test('pr_number override ignores triggering event stack', async () => {
       })
     },
   })
+  assert.deepEqual(
+    urls.map((url) => url.replace(/.*\/repos\/octo\/hello/, '')),
+    ['/pulls/12', '/stacks/50'],
+  )
   assert.equal(result.should_run, false)
   assert.equal(result.position, '2')
   assert.equal(result.is_bottom, false)
@@ -395,7 +411,7 @@ test('bottom_n=2 stack list failure fail-opens', async () => {
   assert.match(result.reason, /could not determine remaining stack depth/)
 })
 
-test('event stack on synchronize does not fetch the PR', async () => {
+test('event stack on synchronize fetches the stack listing, not the pull request', async () => {
   const dir = tempDir()
   const event = writeEvent(dir, {
     action: 'synchronize',
@@ -414,17 +430,24 @@ test('event stack on synchronize does not fetch the PR', async () => {
     GITHUB_EVENT_NAME: 'pull_request',
     GITHUB_EVENT_PATH: event,
   })
-  let fetches = 0
+  const urls = []
   const { result } = await run(env, {
     log: silent,
-    fetch: async () => {
-      fetches += 1
-      throw new Error('no fetch')
+    fetch: async (url) => {
+      urls.push(String(url))
+      if (!/\/stacks\/50$/.test(String(url))) {
+        throw new Error(`unexpected fetch ${url}`)
+      }
+      return jsonResponse({ message: 'nope' }, 404)
     },
   })
-  assert.equal(fetches, 0)
+  assert.deepEqual(
+    urls.map((url) => url.replace(/.*\/repos\/octo\/hello/, '')),
+    ['/stacks/50'],
+  )
   assert.equal(result.should_run, true)
   assert.equal(result.is_bottom, true)
+  assert.equal(parseOutputs(env.GITHUB_OUTPUT)['remaining-depth'], '')
 })
 
 test('bottom-n=2 with this PR missing from the stack list fail-opens', async () => {
@@ -481,7 +504,20 @@ test('writes every kebab-case output', async () => {
     GITHUB_EVENT_NAME: 'pull_request',
     GITHUB_EVENT_PATH: event,
   })
-  await run(env, { log: silent })
+  await run(env, {
+    log: silent,
+    fetch: async (url) => {
+      assert.match(url, /\/stacks\/50$/)
+      return jsonResponse({
+        number: 50,
+        pull_requests: [
+          { number: 10, state: 'open' },
+          { number: 11, state: 'open' },
+          { number: 12, state: 'open' },
+        ],
+      })
+    },
+  })
   const out = parseOutputs(env.GITHUB_OUTPUT)
   assert.deepEqual(
     Object.keys(out).sort(),
@@ -491,10 +527,12 @@ test('writes every kebab-case output', async () => {
       'is-top',
       'position',
       'reason',
+      'remaining-depth',
       'should-run',
       'size',
     ].sort(),
   )
+  assert.equal(out['remaining-depth'], '1')
   assert.equal(out['should-run'], 'true')
   assert.equal(out['is-stacked'], 'true')
   assert.equal(out['is-bottom'], 'true')
@@ -551,7 +589,12 @@ function noFetch() {
   return { calls, fetch }
 }
 
-test('mid-stack force-run label runs without fetching', async () => {
+function assertStackListingOnly(calls) {
+  assert.equal(calls.length, 1)
+  assert.match(String(calls[0]), /\/stacks\/50$/)
+}
+
+test('mid-stack force-run label runs without fetching the pull request', async () => {
   const dir = tempDir()
   const { calls, fetch } = noFetch()
   const { result, out } = await runPull(
@@ -560,7 +603,7 @@ test('mid-stack force-run label runs without fetching', async () => {
     {},
     fetch,
   )
-  assert.equal(calls.length, 0)
+  assertStackListingOnly(calls)
   assert.equal(result.should_run, true)
   assert.equal(result.is_bottom, false)
   assert.equal(result.position, '2')
@@ -568,7 +611,7 @@ test('mid-stack force-run label runs without fetching', async () => {
   assert.equal(out.reason, 'force-run label stack-ci:run')
 })
 
-test('mid-stack with a different label skips without fetching', async () => {
+test('mid-stack with a different label skips without fetching the pull request', async () => {
   const dir = tempDir()
   const { calls, fetch } = noFetch()
   const { result, out } = await runPull(
@@ -577,7 +620,7 @@ test('mid-stack with a different label skips without fetching', async () => {
     {},
     fetch,
   )
-  assert.equal(calls.length, 0)
+  assertStackListingOnly(calls)
   assert.equal(result.should_run, false)
   assert.match(result.reason, /middle of stack/)
   assert.equal(out['should-run'], 'false')
@@ -593,7 +636,7 @@ test('empty force-run-label disables force-run', async () => {
     { 'INPUT_FORCE-RUN-LABEL': '' },
     fetch,
   )
-  assert.equal(calls.length, 0)
+  assertStackListingOnly(calls)
   assert.equal(result.should_run, false)
   assert.equal(out['should-run'], 'false')
 })
@@ -607,7 +650,7 @@ test('custom force-run label name runs', async () => {
     { 'INPUT_FORCE-RUN-LABEL': 'ship-it' },
     fetch,
   )
-  assert.equal(calls.length, 0)
+  assertStackListingOnly(calls)
   assert.equal(result.should_run, true)
   assert.equal(out.reason, 'force-run label ship-it')
 })
@@ -625,7 +668,7 @@ test('labeled event counts the added label when the array is empty', async () =>
     {},
     fetch,
   )
-  assert.equal(calls.length, 0)
+  assertStackListingOnly(calls)
   assert.equal(result.should_run, true)
   assert.equal(out.reason, 'force-run label stack-ci:run')
 })
@@ -643,7 +686,7 @@ test('unlabeled event drops the removed label still listed on the pull request',
     {},
     fetch,
   )
-  assert.equal(calls.length, 0)
+  assertStackListingOnly(calls)
   assert.equal(result.should_run, false)
   assert.match(out.reason, /middle of stack/)
 })
@@ -661,7 +704,7 @@ test('unlabeled of another label keeps force-run', async () => {
     {},
     fetch,
   )
-  assert.equal(calls.length, 0)
+  assertStackListingOnly(calls)
   assert.equal(result.should_run, true)
   assert.equal(out.reason, 'force-run label stack-ci:run')
 })
@@ -689,6 +732,7 @@ test('pr-number override uses the fetched pull request labels', async () => {
     { 'INPUT_PR-NUMBER': '12' },
     async (url) => {
       calls.push(url)
+      if (/\/stacks\/50$/.test(url)) return jsonResponse({ message: 'nope' }, 404)
       assert.match(url, /\/pulls\/12$/)
       return jsonResponse({
         number: 12,
@@ -703,7 +747,10 @@ test('pr-number override uses the fetched pull request labels', async () => {
       })
     },
   )
-  assert.deepEqual(calls.map((url) => url.replace(/.*\/repos\/octo\/hello/, '')), ['/pulls/12'])
+  assert.deepEqual(calls.map((url) => url.replace(/.*\/repos\/octo\/hello/, '')), [
+    '/pulls/12',
+    '/stacks/50',
+  ])
   assert.equal(result.should_run, false)
   assert.equal(out['should-run'], 'false')
 })
@@ -731,6 +778,8 @@ test('pr-number override force-runs from the fetched labels', async () => {
     { 'INPUT_PR-NUMBER': '12' },
     async (url) => {
       calls.push(url)
+      if (/\/stacks\/50$/.test(url)) return jsonResponse({ message: 'nope' }, 404)
+      assert.match(url, /\/pulls\/12$/)
       return jsonResponse({
         number: 12,
         base: { ref: 'feat/api' },
@@ -744,8 +793,10 @@ test('pr-number override force-runs from the fetched labels', async () => {
       })
     },
   )
-  assert.equal(calls.length, 1)
-  assert.match(calls[0], /\/pulls\/12$/)
+  assert.deepEqual(calls.map((url) => url.replace(/.*\/repos\/octo\/hello/, '')), [
+    '/pulls/12',
+    '/stacks/50',
+  ])
   assert.equal(result.should_run, true)
   assert.equal(out.reason, 'force-run label stack-ci:run')
 })
@@ -765,6 +816,8 @@ test('opened without event stack uses labels from the pull request fetch', async
     {},
     async (url) => {
       calls.push(url)
+      if (/\/stacks\/50$/.test(url)) return jsonResponse({ message: 'nope' }, 404)
+      assert.match(url, /\/pulls\/11$/)
       return jsonResponse({
         number: 11,
         base: { ref: 'feat/auth' },
@@ -778,8 +831,10 @@ test('opened without event stack uses labels from the pull request fetch', async
       })
     },
   )
-  assert.equal(calls.length, 1)
-  assert.match(calls[0], /\/pulls\/11$/)
+  assert.deepEqual(calls.map((url) => url.replace(/.*\/repos\/octo\/hello/, '')), [
+    '/pulls/11',
+    '/stacks/50',
+  ])
   assert.equal(result.should_run, true)
   assert.equal(result.reason, 'force-run label stack-ci:run')
 })
@@ -816,4 +871,428 @@ test('force-run reason neutralizes workflow commands in the label name', async (
   )
   assert.equal(out.reason, 'force-run label bad: :name')
   assert.doesNotMatch(fs.readFileSync(env.GITHUB_OUTPUT, 'utf8'), /::/)
+})
+
+function summaryEnv(dir, extra = {}) {
+  return {
+    GITHUB_STEP_SUMMARY: path.join(dir, 'summary.md'),
+    ...extra,
+  }
+}
+
+function openPulls(...numbers) {
+  return numbers.map((number) => ({ number, state: 'open' }))
+}
+
+test('mid-stack skip writes remaining depth and a job summary', async () => {
+  const dir = tempDir()
+  const lines = []
+  const event = writeEvent(dir, midStackEvent({ number: 12, position: 2, size: 3 }))
+  const env = baseEnv(dir, {
+    GITHUB_EVENT_NAME: 'pull_request',
+    GITHUB_EVENT_PATH: event,
+    ...summaryEnv(dir),
+  })
+  const { result } = await run(env, {
+    log: {
+      log(msg) {
+        lines.push(String(msg))
+      },
+      warn() {},
+      error() {},
+    },
+    fetch: async (url) => {
+      assert.match(url, /\/stacks\/50$/)
+      return jsonResponse({
+        number: 50,
+        pull_requests: openPulls(10, 12, 13),
+      })
+    },
+  })
+  const out = parseOutputs(env.GITHUB_OUTPUT)
+  const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
+  assert.equal(result.should_run, false)
+  assert.equal(out['remaining-depth'], '2')
+  assert.equal(out['should-run'], 'false')
+  assert.match(out.reason, /remaining depth 2 of size 3/)
+  assert.match(summary, /^# Stack CI Gate\n/)
+  assert.match(summary, /\| Decision \| Skip gated jobs \|/)
+  assert.match(summary, /\| Reason \| middle of stack \(remaining depth 2 of size 3\); skipping CI on this layer \|/)
+  assert.match(summary, /\| Stacked \| yes \|/)
+  assert.match(summary, /\| Remaining bottom \| no \|/)
+  assert.match(summary, /\| Top \| no \|/)
+  assert.match(summary, /\| Remaining depth \| 2 \|/)
+  assert.match(summary, /\| Position \| 2 \|/)
+  assert.match(summary, /\| Size \| 3 \|/)
+  assert.match(summary, /\| Event \| pull_request synchronize \|/)
+  assert.match(summary, /\| Stack source \| event \|/)
+  assert.match(summary, /## Where gated CI runs/)
+  assert.match(summary, /- Remaining bottom: \[#10\]\(\/octo\/hello\/pull\/10\) \(other\)/)
+  assert.match(summary, /- Top: \[#13\]\(\/octo\/hello\/pull\/13\) \(other\)/)
+  assert.match(summary, /- This pull request: \[#12\]\(\/octo\/hello\/pull\/12\), remaining depth 2/)
+  const fields = [
+    'Decision',
+    'Reason',
+    'Stacked',
+    'Remaining bottom',
+    'Top',
+    'Remaining depth',
+    'Position',
+    'Size',
+    'Event',
+    'Stack source',
+  ]
+  const indexes = fields.map((name) => summary.indexOf(`| ${name} |`))
+  assert.ok(indexes.every((index) => index >= 0))
+  for (let i = 1; i < indexes.length; i++) assert.ok(indexes[i] > indexes[i - 1])
+  const trace = lines.find((line) => line.includes('gate-trace'))
+  assert.match(trace, /event=pull_request/)
+  assert.match(trace, /action=synchronize/)
+  assert.match(trace, /source=event/)
+  assert.match(trace, /event_stack=yes/)
+  assert.match(trace, /remaining_depth=2/)
+})
+
+test('remaining bottom summary names this pull request and keeps position', async () => {
+  const dir = tempDir()
+  const { result, out, env } = await runPull(
+    dir,
+    midStackEvent({ number: 10, baseRef: 'main', position: 2, size: 4 }),
+    summaryEnv(dir),
+    async (url) => {
+      assert.match(url, /\/stacks\/50$/)
+      return jsonResponse({
+        number: 50,
+        pull_requests: [
+          { number: 9, state: 'closed' },
+          ...openPulls(10, 11, 12),
+        ],
+      })
+    },
+  )
+  const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
+  assert.equal(result.should_run, true)
+  assert.equal(result.is_bottom, true)
+  assert.equal(out['remaining-depth'], '1')
+  assert.match(out.reason, /lowest unmerged PR/)
+  assert.match(summary, /\| Decision \| Run gated jobs \|/)
+  assert.match(summary, /\| Remaining depth \| 1 \|/)
+  assert.match(summary, /\| Position \| 2 \|/)
+  assert.match(summary, /\| Size \| 4 \|/)
+  assert.match(summary, /- Remaining bottom: \[#10\]\(\/octo\/hello\/pull\/10\) \(this pull request\)/)
+  assert.match(summary, /- Top: \[#12\]\(\/octo\/hello\/pull\/12\) \(other\)/)
+  assert.match(summary, /- This pull request: \[#10\]\(\/octo\/hello\/pull\/10\), remaining depth 1/)
+})
+
+test('top summary says this pull request when run-top is on', async () => {
+  const dir = tempDir()
+  const { result, out, env } = await runPull(
+    dir,
+    midStackEvent({ number: 13, baseRef: 'feat/top', position: 3, size: 3 }),
+    summaryEnv(dir),
+    async () =>
+      jsonResponse({
+        number: 50,
+        pull_requests: openPulls(10, 12, 13),
+      }),
+  )
+  const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
+  assert.equal(result.should_run, true)
+  assert.equal(out['remaining-depth'], '3')
+  assert.match(summary, /\| Decision \| Run gated jobs \|/)
+  assert.match(summary, /- Top: \[#13\]\(\/octo\/hello\/pull\/13\) \(this pull request\)/)
+  assert.match(summary, /- This pull request: \[#13\]\(\/octo\/hello\/pull\/13\), remaining depth 3/)
+})
+
+test('run-top false omits the top pull request from the summary', async () => {
+  const dir = tempDir()
+  const { result, env } = await runPull(
+    dir,
+    midStackEvent({ number: 13, baseRef: 'feat/top', position: 3, size: 3 }),
+    summaryEnv(dir, { 'INPUT_RUN-TOP': 'false' }),
+    async () =>
+      jsonResponse({
+        number: 50,
+        pull_requests: openPulls(10, 12, 13),
+      }),
+  )
+  const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
+  assert.equal(result.should_run, false)
+  assert.match(summary, /\| Top \| yes \|/)
+  assert.match(summary, /- Remaining bottom: \[#10\]\(\/octo\/hello\/pull\/10\) \(other\)/)
+  assert.doesNotMatch(summary, /^- Top: /m)
+  assert.match(summary, /- This pull request: \[#13\]\(\/octo\/hello\/pull\/13\), remaining depth 3/)
+})
+
+test('job summary is skipped when GITHUB_STEP_SUMMARY is unset', async () => {
+  const dir = tempDir()
+  const { result, out } = await runPull(
+    dir,
+    midStackEvent({ number: 12 }),
+    {},
+    async () =>
+      jsonResponse({
+        number: 50,
+        pull_requests: openPulls(10, 12, 13),
+      }),
+  )
+  assert.equal(result.should_run, false)
+  assert.equal(out['remaining-depth'], '2')
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['event.json', 'output.txt'])
+})
+
+test('stacks listing failure with bottom-n=1 still skips a mid-stack pull request', async () => {
+  const dir = tempDir()
+  const logs = []
+  const event = writeEvent(dir, midStackEvent({ number: 12, position: 2, size: 3 }))
+  const env = baseEnv(dir, {
+    GITHUB_EVENT_NAME: 'pull_request',
+    GITHUB_EVENT_PATH: event,
+    ...summaryEnv(dir),
+  })
+  const { exitCode, result } = await run(env, {
+    log: {
+      log(msg) {
+        logs.push(String(msg))
+      },
+      warn(msg) {
+        logs.push(String(msg))
+      },
+      error(msg) {
+        logs.push(String(msg))
+      },
+    },
+    fetch: async (url) => {
+      assert.match(url, /\/stacks\/50$/)
+      return jsonResponse({ message: 'secret-body' }, 404)
+    },
+  })
+  const out = parseOutputs(env.GITHUB_OUTPUT)
+  const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
+  assert.equal(exitCode, 0)
+  assert.equal(result.should_run, false)
+  assert.equal(out['remaining-depth'], '')
+  assert.match(out.reason, /position 2 of size 3/)
+  assert.match(summary, /\| Decision \| Skip gated jobs \|/)
+  assert.match(summary, /\| Remaining depth \| unknown \|/)
+  assert.match(summary, /\| Position \| 2 \|/)
+  assert.doesNotMatch(summary, /Where gated CI runs/)
+  assert.doesNotMatch(summary, /secret-body/)
+  assert.doesNotMatch(logs.join('\n'), /secret-body/)
+})
+
+test('stacks listing failure with bottom-n=2 fail-opens and omits where CI runs', async () => {
+  const dir = tempDir()
+  const { result, out, env } = await runPull(
+    dir,
+    midStackEvent({ number: 12, position: 2, size: 4 }),
+    summaryEnv(dir, { 'INPUT_BOTTOM-N': '2' }),
+    async () => jsonResponse({ message: 'secret-body' }, 404),
+  )
+  const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
+  assert.equal(result.should_run, true)
+  assert.equal(out['remaining-depth'], '')
+  assert.match(result.reason, /could not determine remaining stack depth/)
+  assert.match(summary, /\| Decision \| Run gated jobs \|/)
+  assert.match(summary, /\| Remaining depth \| unknown \|/)
+  assert.doesNotMatch(summary, /Where gated CI runs/)
+  assert.doesNotMatch(summary, /secret-body/)
+})
+
+test('merge_group summary runs and leaves depth unknown', async () => {
+  const dir = tempDir()
+  const env = baseEnv(dir, {
+    GITHUB_EVENT_NAME: 'merge_group',
+    ...summaryEnv(dir),
+  })
+  let fetches = 0
+  const { result } = await run(env, {
+    log: silent,
+    fetch: async () => {
+      fetches += 1
+      throw new Error('no fetch')
+    },
+  })
+  const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
+  assert.equal(fetches, 0)
+  assert.equal(result.should_run, true)
+  assert.equal(parseOutputs(env.GITHUB_OUTPUT)['remaining-depth'], '')
+  assert.match(summary, /\| Decision \| Run gated jobs \|/)
+  assert.match(summary, /\| Remaining depth \| unknown \|/)
+  assert.match(summary, /\| Position \| unknown \|/)
+  assert.match(summary, /\| Size \| unknown \|/)
+  assert.match(summary, /\| Event \| merge_group \|/)
+  assert.match(summary, /\| Stack source \| n\/a \|/)
+  assert.doesNotMatch(summary, /Where gated CI runs/)
+})
+
+test('standalone summary omits where gated CI runs', async () => {
+  const dir = tempDir()
+  const urls = []
+  const { result, out, env } = await runPull(
+    dir,
+    {
+      action: 'synchronize',
+      pull_request: { number: 42, base: { ref: 'main' }, stack: null },
+    },
+    summaryEnv(dir),
+    async (url) => {
+      urls.push(String(url))
+      assert.match(url, /\/pulls\/42$/)
+      return jsonResponse({ number: 42, base: { ref: 'main' }, stack: null })
+    },
+  )
+  const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
+  assert.deepEqual(
+    urls.map((url) => url.replace(/.*\/repos\/octo\/hello/, '')),
+    ['/pulls/42'],
+  )
+  assert.equal(result.should_run, true)
+  assert.equal(out['remaining-depth'], '')
+  assert.match(summary, /\| Stacked \| no \|/)
+  assert.match(summary, /\| Remaining depth \| unknown \|/)
+  assert.match(summary, /\| Stack source \| api \|/)
+  assert.doesNotMatch(summary, /Where gated CI runs/)
+})
+
+test('invalid input summary still runs and does not throw', async () => {
+  const dir = tempDir()
+  const env = baseEnv(dir, {
+    'INPUT_BOTTOM-N': 'nope',
+    GITHUB_EVENT_NAME: 'pull_request',
+    ...summaryEnv(dir),
+  })
+  const { exitCode, result } = await run(env, { log: silent })
+  const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
+  assert.equal(exitCode, 0)
+  assert.equal(result.should_run, true)
+  assert.equal(parseOutputs(env.GITHUB_OUTPUT)['remaining-depth'], '')
+  assert.match(summary, /\| Decision \| Run gated jobs \|/)
+  assert.match(summary, /\| Reason \| invalid input; running CI/)
+  assert.match(summary, /\| Remaining depth \| unknown \|/)
+  assert.match(summary, /\| Event \| pull_request \|/)
+  assert.match(summary, /\| Stack source \| invalid-input \|/)
+  assert.doesNotMatch(summary, /Where gated CI runs/)
+})
+
+test('a job summary write failure does not change should-run', async () => {
+  const dir = tempDir()
+  const warnings = []
+  const event = writeEvent(dir, midStackEvent({ number: 12 }))
+  const env = baseEnv(dir, {
+    GITHUB_EVENT_NAME: 'pull_request',
+    GITHUB_EVENT_PATH: event,
+    GITHUB_STEP_SUMMARY: path.join(dir, 'missing', 'summary.md'),
+  })
+  const { exitCode, result } = await run(env, {
+    log: {
+      log() {},
+      error() {},
+      warn(msg) {
+        warnings.push(String(msg))
+      },
+    },
+    fetch: async () =>
+      jsonResponse({
+        number: 50,
+        pull_requests: openPulls(10, 12, 13),
+      }),
+  })
+  assert.equal(exitCode, 0)
+  assert.equal(result.should_run, false)
+  assert.equal(parseOutputs(env.GITHUB_OUTPUT)['should-run'], 'false')
+  assert.equal(parseOutputs(env.GITHUB_OUTPUT)['remaining-depth'], '2')
+  assert.match(warnings.join('\n'), /Could not write the job summary/)
+})
+
+test('an output write failure does not change should-run', async () => {
+  const dir = tempDir()
+  const outputDir = path.join(dir, 'output-dir')
+  fs.mkdirSync(outputDir)
+  const warnings = []
+  const event = writeEvent(dir, midStackEvent({ number: 12 }))
+  const env = baseEnv(dir, {
+    GITHUB_EVENT_NAME: 'pull_request',
+    GITHUB_EVENT_PATH: event,
+    GITHUB_OUTPUT: outputDir,
+    ...summaryEnv(dir),
+  })
+  const { exitCode, result } = await run(env, {
+    log: {
+      log() {},
+      error() {},
+      warn(msg) {
+        warnings.push(String(msg))
+      },
+    },
+    fetch: async () =>
+      jsonResponse({
+        number: 50,
+        pull_requests: openPulls(10, 12, 13),
+      }),
+  })
+  const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
+  assert.equal(exitCode, 0)
+  assert.equal(result.should_run, false)
+  assert.match(summary, /\| Decision \| Skip gated jobs \|/)
+  assert.match(warnings.join('\n'), /Could not write gate outputs/)
+})
+
+test('summary text neutralizes workflow commands', async () => {
+  const dir = tempDir()
+  const label = 'bad::name##[x|y'
+  const { out, env } = await runPull(
+    dir,
+    midStackEvent({ labels: [{ name: label }] }),
+    summaryEnv(dir, { 'INPUT_FORCE-RUN-LABEL': label }),
+    async () => {
+      throw new Error('no fetch')
+    },
+  )
+  const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
+  assert.equal(out.reason, 'force-run label bad: :name# [x|y')
+  assert.match(summary, /force-run label bad: :name# \[x\/y/)
+  assert.doesNotMatch(summary, /::/)
+  assert.doesNotMatch(summary, /##\[/)
+  assert.doesNotMatch(fs.readFileSync(env.GITHUB_OUTPUT, 'utf8'), /::/)
+})
+
+test('summary does not link a repository name that can inject commands', async () => {
+  const dir = tempDir()
+  const { env } = await runPull(
+    dir,
+    midStackEvent({ number: 12 }),
+    summaryEnv(dir, { GITHUB_REPOSITORY: 'octo/hello::bad' }),
+    async () =>
+      jsonResponse({
+        number: 50,
+        pull_requests: openPulls(10, 12, 13),
+      }),
+  )
+  const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
+  assert.match(summary, /Remaining bottom: #10 \(other\)/)
+  assert.doesNotMatch(summary, /::/)
+  assert.doesNotMatch(summary, /\]\(/)
+})
+
+test('error summary omits the API response body', async () => {
+  const dir = tempDir()
+  const { result, out, env } = await runPull(
+    dir,
+    {
+      action: 'synchronize',
+      pull_request: { number: 42, base: { ref: 'feat/auth' }, stack: null },
+    },
+    summaryEnv(dir),
+    async () => jsonResponse({ message: '::error::pwned ##[warning]x' }, 502),
+  )
+  const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
+  assert.equal(result.should_run, true)
+  assert.equal(out['remaining-depth'], '')
+  assert.match(summary, /\| Decision \| Run gated jobs \|/)
+  assert.match(summary, /\| Stack source \| error \|/)
+  assert.doesNotMatch(summary, /pwned/)
+  assert.doesNotMatch(summary, /::/)
+  assert.doesNotMatch(summary, /##\[/)
+  assert.doesNotMatch(summary, /Where gated CI runs/)
 })
