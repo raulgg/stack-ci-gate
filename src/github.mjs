@@ -6,15 +6,32 @@ export const FETCH_TIMEOUT_MS = 15_000
 /** Immediate fetch, then backoff. Total wait ~6s so `opened` can see the stack. */
 export const OPENED_RETRY_DELAYS_MS = [0, 1000, 2000, 3000]
 
+function openStackPulls(pulls) {
+  if (!Array.isArray(pulls)) return null
+  return pulls.filter((pr) => pr && pr.state === 'open')
+}
+
 /** Open PRs, from the start of the list, are remaining-bottom first. */
 export function remainingDepthFromStackPulls(pulls, prNumber) {
-  if (!Array.isArray(pulls)) return null
-  const unmerged = pulls.filter((pr) => pr && pr.state === 'open')
+  const unmerged = openStackPulls(pulls)
+  if (unmerged == null) return null
   const index = unmerged.findIndex(
     (pr) => Number(pr.number) === Number(prNumber),
   )
   if (index === -1) return null
   return index + 1
+}
+
+function openPullNumbers(pulls) {
+  const unmerged = openStackPulls(pulls)
+  if (unmerged == null) return null
+  const numbers = []
+  for (const pr of unmerged) {
+    const number = Number(pr.number)
+    if (!Number.isInteger(number) || number < 1) continue
+    numbers.push(number)
+  }
+  return numbers
 }
 
 export function normalizeStack(stack) {
@@ -179,8 +196,8 @@ export async function resolvePull({
 }
 
 /**
- * Event/API pull plus remaining depth when bottom-n > 1.
- * Listing failures leave remainingDepth null so decide fail-opens.
+ * Event/API pull plus remaining depth for every stacked pull request.
+ * Listing failures leave remainingDepth null so bottom-n > 1 still fail-opens.
  */
 export async function resolveContext({
   eventAction,
@@ -196,7 +213,6 @@ export async function resolveContext({
   sleep,
   retryDelaysMs,
   timeoutMs = FETCH_TIMEOUT_MS,
-  bottomN,
 }) {
   const pull = await resolvePull({
     eventAction,
@@ -215,7 +231,9 @@ export async function resolveContext({
   })
 
   let remainingDepth = null
-  if (bottomN > 1 && pull.stack?.number != null) {
+  let remainingBottomNumber = null
+  let topNumber = null
+  if (pull.stack?.number != null && token) {
     try {
       const stackPayload = await fetchStack({
         apiUrl,
@@ -225,14 +243,19 @@ export async function resolveContext({
         fetchImpl,
         timeoutMs,
       })
-      remainingDepth = remainingDepthFromStackPulls(
-        stackPayload.pull_requests,
-        pull.prNumber,
-      )
+      const pulls = stackPayload?.pull_requests
+      remainingDepth = remainingDepthFromStackPulls(pulls, pull.prNumber)
+      const numbers = openPullNumbers(pulls)
+      if (numbers != null && numbers.length > 0) {
+        remainingBottomNumber = numbers[0]
+        topNumber = numbers[numbers.length - 1]
+      }
     } catch {
       remainingDepth = null
+      remainingBottomNumber = null
+      topNumber = null
     }
   }
 
-  return { ...pull, remainingDepth }
+  return { ...pull, remainingDepth, remainingBottomNumber, topNumber }
 }

@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import {
   GITHUB_API_VERSION,
   remainingDepthFromStackPulls,
+  resolveContext,
   resolvePull,
 } from './github.mjs'
 
@@ -326,6 +327,80 @@ test('pr_number override returns API labels, not event labels', async () => {
   assert.deepEqual(resolved.labels, ['bug'])
   assert.equal(resolved.prNumber, 11)
   assert.equal(resolved.source, 'api')
+})
+
+test('resolveContext fetches remaining depth for a stacked pull request', async () => {
+  const calls = []
+  let init
+  const resolved = await resolveContext({
+    eventAction: 'synchronize',
+    eventStack: middleStack,
+    eventPrNumber: 12,
+    eventPrBaseRef: 'feat/auth',
+    repo: 'octo/hello',
+    token: 't',
+    fetchImpl: async (url, options) => {
+      calls.push(url)
+      init = options
+      assert.match(url, /\/repos\/octo\/hello\/stacks\/50$/)
+      return jsonResponse({
+        number: 50,
+        pull_requests: [
+          { number: 10, state: 'closed' },
+          { number: 11, state: 'open' },
+          { number: 12, state: 'open' },
+          { number: 13, state: 'open' },
+        ],
+      })
+    },
+  })
+  assert.deepEqual(
+    calls.map((url) => url.replace(/.*\/repos\/octo\/hello/, '')),
+    ['/stacks/50'],
+  )
+  assert.equal(init.redirect, 'error')
+  assert.equal(init.headers['X-GitHub-Api-Version'], GITHUB_API_VERSION)
+  assert.equal(resolved.remainingDepth, 2)
+  assert.equal(resolved.remainingBottomNumber, 11)
+  assert.equal(resolved.topNumber, 13)
+  assert.equal(resolved.prNumber, 12)
+  assert.equal(resolved.source, 'event')
+})
+
+test('resolveContext leaves remaining depth unknown when the stacks GET fails', async () => {
+  const resolved = await resolveContext({
+    eventAction: 'synchronize',
+    eventStack: middleStack,
+    eventPrNumber: 42,
+    eventPrBaseRef: 'feat/auth',
+    repo: 'octo/hello',
+    token: 't',
+    fetchImpl: async () => jsonResponse({ message: 'boom' }, 404),
+  })
+  assert.equal(resolved.remainingDepth, null)
+  assert.equal(resolved.remainingBottomNumber, null)
+  assert.equal(resolved.topNumber, null)
+  assert.equal(resolved.stack.position, 2)
+})
+
+test('resolveContext does not fetch the stack listing without a token', async () => {
+  let fetches = 0
+  const resolved = await resolveContext({
+    eventAction: 'synchronize',
+    eventStack: middleStack,
+    eventPrNumber: 42,
+    eventPrBaseRef: 'feat/auth',
+    repo: 'octo/hello',
+    token: '',
+    fetchImpl: async () => {
+      fetches += 1
+      throw new Error('no fetch')
+    },
+  })
+  assert.equal(fetches, 0)
+  assert.equal(resolved.remainingDepth, null)
+  assert.equal(resolved.remainingBottomNumber, null)
+  assert.equal(resolved.source, 'event')
 })
 
 test('API failure propagates so the gate can fail open', async () => {
