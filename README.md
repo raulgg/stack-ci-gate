@@ -135,6 +135,8 @@ All outputs are strings. Compare them with `== 'true'` or `== 'false'`. Gate job
 
 Remaining bottom is the PR whose base is the stack base. After a partial merge, remaining bottom is not `position == 1`. A 1-PR stack is both bottom and top.
 
+When CI runs only because the gate could not decide, such as a missing `pull-requests: read`, the step adds a warning annotation and an `Action needed` section to the job summary with the cause and the fix. With `bottom-n` above 1, a failed stack lookup on the remaining bottom or the top does not change the decision, so it appears only in the log and the summary.
+
 The label stays until someone removes it, and it can only turn a skip into a run.
 
 The action never cancels the run. `merge_group` always runs.

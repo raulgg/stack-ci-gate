@@ -400,6 +400,82 @@ test('pull_request_target mid-stack force-runs on the label', () => {
   assert.equal(result.reason, FORCE_REASON)
 })
 
+test('a lookup problem with no stack is degraded and not reported as standalone', () => {
+  const result = decide({
+    ...defaults,
+    stack: null,
+    prBaseRef: 'main',
+    lookupProblem: 'no token',
+  })
+  assert.equal(result.should_run, true)
+  assert.equal(result.degraded, true)
+  assert.equal(result.reason, 'could not read the stack; running CI (no token)')
+})
+
+test('no stack without a lookup problem is a healthy standalone pull request', () => {
+  const result = decide({ ...defaults, stack: null, prBaseRef: 'main' })
+  assert.equal(result.reason, 'not in a stack; running CI')
+  assert.equal(result.degraded, undefined)
+})
+
+test('unknown depth above bottom-n is degraded and carries the lookup problem', () => {
+  const result = decide({
+    ...defaults,
+    bottomN: 2,
+    stack: stackOf({ position: 2, size: 3 }),
+    prBaseRef: 'feat/auth',
+    lookupProblem: 'GET x → 403',
+  })
+  assert.equal(result.should_run, true)
+  assert.equal(result.degraded, true)
+  assert.equal(
+    result.reason,
+    'could not determine remaining stack depth; running CI (GET x → 403)',
+  )
+})
+
+test('unknown depth without a lookup problem is still degraded', () => {
+  const result = decide({
+    ...defaults,
+    bottomN: 2,
+    stack: stackOf({ position: 2, size: 3 }),
+    prBaseRef: 'feat/auth',
+  })
+  assert.equal(result.degraded, true)
+  assert.equal(result.reason, 'could not determine remaining stack depth; running CI')
+})
+
+test('invalid stack metadata is degraded', () => {
+  const result = decide({
+    ...defaults,
+    stack: stackOf({ position: 'nope', size: 3 }),
+    prBaseRef: 'feat/auth',
+  })
+  assert.equal(result.should_run, true)
+  assert.equal(result.degraded, true)
+})
+
+test('a lookup problem that does not change the decision is not degraded', () => {
+  const skip = decide({
+    ...defaults,
+    stack: stackOf({ position: 2, size: 3 }),
+    prBaseRef: 'feat/auth',
+    lookupProblem: 'GET x → 403',
+  })
+  assert.equal(skip.should_run, false)
+  assert.equal(skip.degraded, undefined)
+
+  const top = decide({
+    ...defaults,
+    bottomN: 2,
+    stack: stackOf({ position: 3, size: 3 }),
+    prBaseRef: 'feat/next',
+    lookupProblem: 'GET x → 403',
+  })
+  assert.equal(top.should_run, true)
+  assert.equal(top.degraded, undefined)
+})
+
 test('parseForceRunLabel defaults when missing and disables on empty', () => {
   assert.equal(parseForceRunLabel(undefined), 'stack-ci:run')
   assert.equal(parseForceRunLabel(null), 'stack-ci:run')

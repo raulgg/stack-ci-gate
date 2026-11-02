@@ -131,7 +131,7 @@ export async function resolvePull({
       prBaseRef: eventPrBaseRef ?? '',
       stack: null,
       labels: [],
-      source: 'none',
+      source: override ? 'invalid-pr-number' : 'none',
     }
   }
 
@@ -178,9 +178,20 @@ export async function resolvePull({
   }
 }
 
+function pullLookupProblem(pull, token, bottomN) {
+  if (pull.source === 'invalid-pr-number') {
+    return { kind: 'invalid-pr-number', message: 'pr-number is not a number' }
+  }
+  if (!token && (pull.source === 'no-token' || (bottomN > 1 && pull.stack != null))) {
+    return { kind: 'no-token', message: 'no token to read the stack' }
+  }
+  return null
+}
+
 /**
  * Event/API pull plus remaining depth when bottom-n > 1.
- * Listing failures leave remainingDepth null so decide fail-opens.
+ * Listing failures leave remainingDepth null so decide fail-opens,
+ * and lookupProblem says why.
  */
 export async function resolveContext({
   eventAction,
@@ -215,7 +226,8 @@ export async function resolveContext({
   })
 
   let remainingDepth = null
-  if (bottomN > 1 && pull.stack?.number != null) {
+  let lookupProblem = pullLookupProblem(pull, token, bottomN)
+  if (bottomN > 1 && pull.stack?.number != null && token) {
     try {
       const stackPayload = await fetchStack({
         apiUrl,
@@ -226,13 +238,17 @@ export async function resolveContext({
         timeoutMs,
       })
       remainingDepth = remainingDepthFromStackPulls(
-        stackPayload.pull_requests,
+        stackPayload?.pull_requests,
         pull.prNumber,
       )
-    } catch {
+    } catch (err) {
       remainingDepth = null
+      lookupProblem = {
+        message: err instanceof Error ? err.message : String(err),
+        status: err?.status,
+      }
     }
   }
 
-  return { ...pull, remainingDepth }
+  return { ...pull, remainingDepth, lookupProblem }
 }

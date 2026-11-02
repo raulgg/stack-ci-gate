@@ -1100,3 +1100,239 @@ test('error summary neutralizes workflow commands and pipes in the error', async
   assert.doesNotMatch(summary, /::/)
   assert.doesNotMatch(summary, /##\[/)
 })
+
+const ANNOTATION = /^::warning title=Stack CI Gate::/
+
+async function runCaptured(dir, payload, envExtra, fetch) {
+  const event = writeEvent(dir, payload)
+  const env = baseEnv(dir, {
+    GITHUB_EVENT_NAME: 'pull_request',
+    GITHUB_EVENT_PATH: event,
+    ...summaryEnv(dir),
+    ...envExtra,
+  })
+  const logs = []
+  const warnings = []
+  const { exitCode, result } = await run(env, {
+    log: {
+      log(msg) {
+        logs.push(String(msg))
+      },
+      error() {},
+      warn(msg) {
+        warnings.push(String(msg))
+      },
+    },
+    sleep: async () => {},
+    fetch,
+  })
+  return {
+    exitCode,
+    result,
+    logs,
+    warnings,
+    out: parseOutputs(env.GITHUB_OUTPUT),
+    summary: fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8'),
+  }
+}
+
+function openPulls(...numbers) {
+  return numbers.map((number) => ({ number, state: 'open' }))
+}
+
+const unstackedEvent = {
+  action: 'synchronize',
+  pull_request: { number: 42, base: { ref: 'feat/auth' }, stack: null },
+}
+
+for (const [status, hint] of [
+  [401, /github-token/],
+  [403, /pull-requests: read.*rate limit/],
+  [404, /pull-requests: read/],
+  [429, /usually temporary/],
+  [500, /usually temporary/],
+]) {
+  test(`a ${status} from the pull request lookup warns with its fix`, async () => {
+    const { exitCode, out, warnings, summary } = await runCaptured(
+      tempDir(),
+      unstackedEvent,
+      {},
+      async () => jsonResponse({ message: 'nope' }, status),
+    )
+    assert.equal(exitCode, 0)
+    assert.equal(out['should-run'], 'true')
+    assert.equal(warnings.length, 1)
+    assert.match(warnings[0], ANNOTATION)
+    assert.match(warnings[0], new RegExp(`→ ${status}`))
+    assert.match(warnings[0], hint)
+    assert.match(summary, /## Action needed/)
+    assert.match(summary, hint)
+  })
+}
+
+test('a timed out pull request lookup warns that it is temporary', async () => {
+  const { out, warnings } = await runCaptured(
+    tempDir(),
+    unstackedEvent,
+    {},
+    async () => {
+      throw new Error('The operation was aborted due to timeout')
+    },
+  )
+  assert.equal(out['should-run'], 'true')
+  assert.match(warnings[0], ANNOTATION)
+  assert.match(warnings[0], /timeout.*usually temporary/)
+})
+
+test('a failed stack lookup that forces a run warns with the cause', async () => {
+  const { out, warnings, summary } = await runCaptured(
+    tempDir(),
+    midStackEvent(),
+    { 'INPUT_BOTTOM-N': '2' },
+    async () => jsonResponse({ message: 'nope' }, 403),
+  )
+  assert.equal(out['should-run'], 'true')
+  assert.match(out.reason, /could not determine remaining stack depth; running CI \(.*→ 403\)/)
+  assert.match(warnings[0], ANNOTATION)
+  assert.match(warnings[0], /pull-requests: read/)
+  assert.match(summary, /## Action needed/)
+  assert.match(summary, /\| Stack lookup \| GET .*→ 403 \|/)
+})
+
+for (const [name, payload] of [
+  ['remaining bottom', midStackEvent({ baseRef: 'main', position: 1 })],
+  ['top', midStackEvent({ position: 3 })],
+]) {
+  test(`a failed stack lookup on the ${name} only logs with bottom-n=2`, async () => {
+    const { out, warnings, logs, summary } = await runCaptured(
+      tempDir(),
+      payload,
+      { 'INPUT_BOTTOM-N': '2' },
+      async () => jsonResponse({ message: 'nope' }, 403),
+    )
+    assert.equal(out['should-run'], 'true')
+    assert.deepEqual(warnings, [])
+    assert.match(logs.join('\n'), /Stack lookup failed.*→ 403/)
+    assert.match(summary, /\| Stack lookup \| GET .*→ 403 \|/)
+    assert.doesNotMatch(summary, /Action needed/)
+  })
+}
+
+test('no token and no event stack warns instead of reporting a standalone PR', async () => {
+  const { out, warnings, summary } = await runCaptured(
+    tempDir(),
+    unstackedEvent,
+    { 'INPUT_GITHUB-TOKEN': '' },
+    async () => {
+      throw new Error('no fetch')
+    },
+  )
+  assert.equal(out['should-run'], 'true')
+  assert.doesNotMatch(out.reason, /not in a stack/)
+  assert.match(out.reason, /no token/)
+  assert.match(warnings[0], ANNOTATION)
+  assert.match(warnings[0], /github-token/)
+  assert.match(summary, /## Action needed/)
+})
+
+test('no token with bottom-n=2 names the token as the cause', async () => {
+  const { out, warnings } = await runCaptured(
+    tempDir(),
+    midStackEvent(),
+    { 'INPUT_BOTTOM-N': '2', 'INPUT_GITHUB-TOKEN': '' },
+    async () => {
+      throw new Error('no fetch')
+    },
+  )
+  assert.equal(out['should-run'], 'true')
+  assert.match(out.reason, /could not determine remaining stack depth.*no token/)
+  assert.match(warnings[0], /github-token/)
+})
+
+test('a non-numeric pr-number warns and names the input', async () => {
+  let fetches = 0
+  const { out, warnings } = await runCaptured(
+    tempDir(),
+    unstackedEvent,
+    { 'INPUT_PR-NUMBER': 'abc' },
+    async () => {
+      fetches += 1
+      throw new Error('no fetch')
+    },
+  )
+  assert.equal(fetches, 0)
+  assert.equal(out['should-run'], 'true')
+  assert.doesNotMatch(out.reason, /not in a stack/)
+  assert.match(out.reason, /pr-number/)
+  assert.match(warnings[0], ANNOTATION)
+  assert.match(warnings[0], /Set pr-number/)
+})
+
+test('invalid stack metadata warns', async () => {
+  const { out, warnings, summary } = await runCaptured(
+    tempDir(),
+    midStackEvent({ position: 'nope' }),
+    {},
+    async () => jsonResponse({ pull_requests: [] }),
+  )
+  assert.equal(out['should-run'], 'true')
+  assert.equal(out.reason, 'invalid stack metadata; running CI')
+  assert.match(warnings[0], ANNOTATION)
+  assert.match(summary, /## Action needed/)
+})
+
+test('a stack listing without this PR warns with bottom-n=2', async () => {
+  const { out, warnings } = await runCaptured(
+    tempDir(),
+    midStackEvent(),
+    { 'INPUT_BOTTOM-N': '2' },
+    async () => jsonResponse({ number: 50, pull_requests: openPulls(10, 13) }),
+  )
+  assert.equal(out['should-run'], 'true')
+  assert.equal(out.reason, 'could not determine remaining stack depth; running CI')
+  assert.match(warnings[0], ANNOTATION)
+})
+
+test('standalone pull requests and normal skips stay quiet', async () => {
+  const standalone = await runCaptured(
+    tempDir(),
+    unstackedEvent,
+    {},
+    async () => jsonResponse({ number: 42, base: { ref: 'main' }, stack: null }),
+  )
+  assert.equal(standalone.out['should-run'], 'true')
+  assert.equal(standalone.out.reason, 'not in a stack; running CI')
+  assert.deepEqual(standalone.warnings, [])
+  assert.doesNotMatch(standalone.summary, /Action needed|Stack lookup/)
+
+  const skipped = await runCaptured(
+    tempDir(),
+    midStackEvent({ number: 12 }),
+    {},
+    async () => {
+      throw new Error('no fetch')
+    },
+  )
+  assert.equal(skipped.out['should-run'], 'false')
+  assert.deepEqual(skipped.warnings, [])
+  assert.doesNotMatch(skipped.summary, /Action needed|Stack lookup/)
+})
+
+test('annotations neutralize workflow commands and encoded newlines', async () => {
+  const { warnings, summary } = await runCaptured(
+    tempDir(),
+    unstackedEvent,
+    {},
+    async () => {
+      throw new Error('::error::pwned ##[warning]x %0A::notice::y')
+    },
+  )
+  assert.equal(warnings.length, 1)
+  const body = warnings[0].replace(ANNOTATION, '')
+  assert.doesNotMatch(body, /::/)
+  assert.doesNotMatch(body, /##\[/)
+  assert.doesNotMatch(body, /%0A/)
+  assert.match(body, /%250A/)
+  assert.doesNotMatch(summary, /::/)
+  assert.doesNotMatch(summary, /##\[/)
+})

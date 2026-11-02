@@ -43,6 +43,38 @@ function annotation(level, text) {
   return `::${level} title=Stack CI Gate::${safeText(text).replaceAll('%', '%25')}`
 }
 
+function degradedHint(problem) {
+  if (problem == null) {
+    return 'GitHub sent stack data this action could not use. Update to the latest release.'
+  }
+  if (problem.kind === 'no-token') return 'Set github-token on the gate step.'
+  if (problem.kind === 'invalid-pr-number') {
+    return 'Set pr-number to a pull request number, or leave it unset.'
+  }
+  if (problem.status === 401) return 'Check the github-token input.'
+  if (problem.status === 403) {
+    return 'Add pull-requests: read to the gate job. If it is already there, the token may have hit a rate limit.'
+  }
+  if (problem.status === 404) return 'Add pull-requests: read to the gate job.'
+  return 'This is usually temporary.'
+}
+
+function reportProblem(log, result, problem) {
+  if (result.degraded) {
+    const cause = problem?.message ?? result.reason
+    log.warn(
+      annotation(
+        'warning',
+        `Could not gate stacked CI; running checks by default. (${cause}) ${degradedHint(problem)}`,
+      ),
+    )
+  } else if (problem) {
+    log.log(
+      `Stack lookup failed; the decision did not need it. (${safeText(problem.message)}) ${degradedHint(problem)}`,
+    )
+  }
+}
+
 const UNKNOWN_STACK_SOURCES = new Set(['error', 'no-token', 'invalid-input', 'none'])
 
 function stackFlag(value, source) {
@@ -79,9 +111,13 @@ function summaryMarkdown({ result, trace }) {
     ['Event', summaryCell(eventLabel(trace))],
     ['Stack source', summaryCell(trace.source || 'unknown')],
   ]
+  if (trace.problem) rows.push(['Stack lookup', summaryCell(trace.problem.message)])
   let markdown = '# Stack CI Gate\n\n| Field | Value |\n| --- | --- |\n'
   for (const [field, value] of rows) {
     markdown += `| ${field} | ${value} |\n`
+  }
+  if (result.degraded) {
+    markdown += `\n## Action needed\n\nCI ran because the gate could not decide. ${degradedHint(trace.problem)}\n`
   }
   return markdown
 }
@@ -142,6 +178,7 @@ export async function run(env = process.env, deps = {}) {
         ),
       )
     }
+    reportProblem(log, result, trace.problem)
     writeJobSummary(env.GITHUB_STEP_SUMMARY, { result, trace }, log)
   }
 
@@ -210,19 +247,25 @@ export async function run(env = process.env, deps = {}) {
       remainingDepth: resolved.remainingDepth,
       labelNames,
       forceRunLabel,
+      lookupProblem: resolved.lookupProblem ? safeText(resolved.lookupProblem.message) : '',
     })
     write(result, {
       eventName,
       eventAction: event.action,
       source: resolved.source,
       eventStack: pr.stack,
+      problem: resolved.lookupProblem,
     })
     return { exitCode, result }
   } catch (err) {
     const message = safeText(err instanceof Error ? err.message : String(err))
-    log.warn(`Could not gate stacked CI; running checks by default. (${message})`)
-    const result = failOpen(`error; running CI (${message})`)
-    write(result, { eventName, eventAction: event?.action, source: 'error' })
+    const result = failOpen(`error; running CI (${message})`, { degraded: true })
+    write(result, {
+      eventName,
+      eventAction: event?.action,
+      source: 'error',
+      problem: { message, status: err?.status },
+    })
     return { exitCode, result }
   }
 }

@@ -7,10 +7,16 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 ### Added
 
 - The gate step writes a job summary with the decision, the reason, and the stack position.
+- When CI runs only because the gate could not decide, the gate step adds a warning annotation and an `Action needed` job summary section with the cause and the fix.
 
 ### Changed
 
 - A failed output write adds a `Stack CI Gate` error annotation that says `should-run` is empty, and the gate step still fails.
+
+### Fixed
+
+- A missing token or a non-numeric `pr-number` no longer reports `not in a stack`.
+- `reason` names the failed lookup when remaining depth is unknown with `bottom-n` above 1.
 
 ## 1.1.0 - 2026-10-01
 
