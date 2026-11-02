@@ -38,6 +38,43 @@ function safeText(text) {
   return oneLine(text).replaceAll('::', ': :').replaceAll('##[', '# [')
 }
 
+/** The runner decodes % sequences in messages, so %0A would start a new line. */
+function annotation(level, text) {
+  return `::${level} title=Stack CI Gate::${safeText(text).replaceAll('%', '%25')}`
+}
+
+function degradedHint(problem) {
+  if (problem == null) {
+    return 'GitHub sent stack data this action could not use. Update to the latest release.'
+  }
+  if (problem.kind === 'no-token') return 'Set github-token on the gate step.'
+  if (problem.kind === 'invalid-pr-number') {
+    return 'Set pr-number to a pull request number, or leave it unset.'
+  }
+  if (problem.status === 401) return 'Check the github-token input.'
+  if (problem.status === 403) {
+    return 'Add pull-requests: read to the gate job. If it is already there, the token may have hit a rate limit.'
+  }
+  if (problem.status === 404) return 'Add pull-requests: read to the gate job.'
+  return 'This is usually temporary.'
+}
+
+function reportProblem(log, result, problem) {
+  if (result.degraded) {
+    const cause = problem?.message ?? result.reason
+    log.warn(
+      annotation(
+        'warning',
+        `Could not gate stacked CI; running checks by default. (${cause}) ${degradedHint(problem)}`,
+      ),
+    )
+  } else if (problem) {
+    log.log(
+      `Stack lookup failed; the decision did not need it. (${safeText(problem.message)}) ${degradedHint(problem)}`,
+    )
+  }
+}
+
 function formatRemainingDepth(depth) {
   if (depth == null || depth === '') return ''
   const n = Number(depth)
@@ -110,9 +147,13 @@ function summaryMarkdown({ result, trace, repo, runTop }) {
     ['Event', summaryCell(eventLabel(trace))],
     ['Stack source', summaryCell(trace.source || 'unknown')],
   ]
+  if (trace.problem) rows.push(['Stack lookup', summaryCell(trace.problem.message)])
   let markdown = '# Stack CI Gate\n\n| Field | Value |\n| --- | --- |\n'
   for (const [field, value] of rows) {
     markdown += `| ${field} | ${value} |\n`
+  }
+  if (result.degraded) {
+    markdown += `\n## Action needed\n\nCI ran because the gate could not decide. ${degradedHint(trace.problem)}\n`
   }
   const where = whereGatedCiRuns(trace, repo, runTop)
   if (where) markdown += `\n${where}`
@@ -168,8 +209,9 @@ export async function run(env = process.env, deps = {}) {
       writeOutputs(outputPath, result, log, trace)
     } catch (err) {
       const message = safeText(err instanceof Error ? err.message : String(err))
-      log.warn(`Could not write gate outputs. (${message})`)
+      log.error(annotation('error', `Could not write gate outputs. Gated jobs may skip. (${message})`))
     }
+    reportProblem(log, result, trace.problem)
     writeJobSummary(
       env.GITHUB_STEP_SUMMARY,
       { result, trace, repo: env.GITHUB_REPOSITORY || '', runTop },
@@ -239,6 +281,7 @@ export async function run(env = process.env, deps = {}) {
       remainingDepth: resolved.remainingDepth,
       labelNames,
       forceRunLabel,
+      lookupProblem: resolved.lookupProblem ? safeText(resolved.lookupProblem.message) : '',
     })
     write(result, {
       eventName,
@@ -249,13 +292,13 @@ export async function run(env = process.env, deps = {}) {
       remainingBottomNumber: resolved.remainingBottomNumber,
       topNumber: resolved.topNumber,
       prNumber: resolved.prNumber,
+      problem: resolved.lookupProblem,
     })
     return { exitCode: 0, result }
   } catch (err) {
     const message = safeText(err instanceof Error ? err.message : String(err))
-    log.warn(`Could not gate stacked CI; running checks by default. (${message})`)
-    const result = failOpen(`error; running CI (${message})`)
-    write(result, { eventName, source: 'error' })
+    const result = failOpen(`error; running CI (${message})`, { degraded: true })
+    write(result, { eventName, source: 'error', problem: { message, status: err?.status } })
     return { exitCode: 0, result }
   }
 }

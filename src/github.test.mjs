@@ -381,6 +381,71 @@ test('resolveContext leaves remaining depth unknown when the stacks GET fails', 
   assert.equal(resolved.remainingBottomNumber, null)
   assert.equal(resolved.topNumber, null)
   assert.equal(resolved.stack.position, 2)
+  assert.equal(resolved.lookupProblem.status, 404)
+  assert.match(resolved.lookupProblem.message, /stacks\/50 → 404/)
+  assert.doesNotMatch(resolved.lookupProblem.message, /boom/)
+})
+
+test('resolveContext reports a thrown stack lookup without a status', async () => {
+  const fetchImpl = async (url) => {
+    throw new Error(`timed out ${url}`)
+  }
+  const resolved = await resolveContext({
+    eventAction: 'synchronize',
+    eventStack: middleStack,
+    eventPrNumber: 42,
+    eventPrBaseRef: 'feat/auth',
+    repo: 'octo/hello',
+    token: 't',
+    fetchImpl,
+  })
+  assert.equal(resolved.lookupProblem.status, undefined)
+  assert.match(resolved.lookupProblem.message, /timed out/)
+})
+
+test('resolveContext has no lookup problem when the stacks GET succeeds', async () => {
+  const resolved = await resolveContext({
+    eventAction: 'synchronize',
+    eventStack: middleStack,
+    eventPrNumber: 42,
+    eventPrBaseRef: 'feat/auth',
+    repo: 'octo/hello',
+    token: 't',
+    fetchImpl: async () =>
+      jsonResponse({ pull_requests: [{ number: 42, state: 'open' }] }),
+  })
+  assert.equal(resolved.lookupProblem, null)
+})
+
+test('resolveContext reports a missing token with no event stack', async () => {
+  const resolved = await resolveContext({
+    eventAction: 'synchronize',
+    eventStack: null,
+    eventPrNumber: 42,
+    eventPrBaseRef: 'feat/auth',
+    repo: 'octo/hello',
+    token: '',
+  })
+  assert.equal(resolved.source, 'no-token')
+  assert.equal(resolved.lookupProblem.kind, 'no-token')
+})
+
+test('resolveContext reports a non-numeric pr-number without fetching', async () => {
+  const resolved = await resolveContext({
+    eventAction: 'synchronize',
+    eventStack: middleStack,
+    eventPrNumber: 42,
+    eventPrBaseRef: 'feat/auth',
+    prNumberOverride: 'abc',
+    repo: 'octo/hello',
+    token: 't',
+    fetchImpl: async () => {
+      throw new Error('no fetch')
+    },
+  })
+  assert.equal(resolved.source, 'invalid-pr-number')
+  assert.equal(resolved.stack, null)
+  assert.equal(resolved.lookupProblem.kind, 'invalid-pr-number')
 })
 
 test('resolveContext does not fetch the stack listing without a token', async () => {
@@ -401,6 +466,7 @@ test('resolveContext does not fetch the stack listing without a token', async ()
   assert.equal(resolved.remainingDepth, null)
   assert.equal(resolved.remainingBottomNumber, null)
   assert.equal(resolved.source, 'event')
+  assert.equal(resolved.lookupProblem.kind, 'no-token')
 })
 
 test('API failure propagates so the gate can fail open', async () => {

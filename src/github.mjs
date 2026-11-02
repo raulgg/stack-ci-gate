@@ -148,7 +148,7 @@ export async function resolvePull({
       prBaseRef: eventPrBaseRef ?? '',
       stack: null,
       labels: [],
-      source: 'none',
+      source: override ? 'invalid-pr-number' : 'none',
     }
   }
 
@@ -195,9 +195,20 @@ export async function resolvePull({
   }
 }
 
+function pullLookupProblem(pull, token) {
+  if (pull.source === 'invalid-pr-number') {
+    return { kind: 'invalid-pr-number', message: 'pr-number is not a number' }
+  }
+  if (!token && (pull.source === 'no-token' || pull.stack != null)) {
+    return { kind: 'no-token', message: 'no token to read the stack' }
+  }
+  return null
+}
+
 /**
  * Event/API pull plus remaining depth for every stacked pull request.
- * Listing failures leave remainingDepth null so bottom-n > 1 still fail-opens.
+ * Listing failures leave remainingDepth null so bottom-n > 1 still fail-opens,
+ * and lookupProblem says why.
  */
 export async function resolveContext({
   eventAction,
@@ -233,6 +244,7 @@ export async function resolveContext({
   let remainingDepth = null
   let remainingBottomNumber = null
   let topNumber = null
+  let lookupProblem = pullLookupProblem(pull, token)
   if (pull.stack?.number != null && token) {
     try {
       const stackPayload = await fetchStack({
@@ -250,12 +262,16 @@ export async function resolveContext({
         remainingBottomNumber = numbers[0]
         topNumber = numbers[numbers.length - 1]
       }
-    } catch {
+    } catch (err) {
       remainingDepth = null
       remainingBottomNumber = null
       topNumber = null
+      lookupProblem = {
+        message: err instanceof Error ? err.message : String(err),
+        status: err?.status,
+      }
     }
   }
 
-  return { ...pull, remainingDepth, remainingBottomNumber, topNumber }
+  return { ...pull, remainingDepth, remainingBottomNumber, topNumber, lookupProblem }
 }
