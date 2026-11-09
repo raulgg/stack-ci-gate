@@ -450,6 +450,46 @@ test('resolveContext reports a non-numeric pr-number without fetching', async ()
   assert.equal(resolved.lookupProblem.kind, 'invalid-pr-number')
 })
 
+for (const value of ['-3', '0', '1.5', '0x10', '1e3', '012', '+4', '12abc']) {
+  test(`pr-number ${JSON.stringify(value)} is invalid and does not fetch`, async () => {
+    const resolved = await resolveContext({
+      eventAction: 'synchronize',
+      eventStack: middleStack,
+      eventPrNumber: 42,
+      eventPrBaseRef: 'feat/auth',
+      prNumberOverride: value,
+      repo: 'octo/hello',
+      bottomN: 2,
+      token: 't',
+      fetchImpl: async () => {
+        throw new Error('no fetch')
+      },
+    })
+    assert.equal(resolved.source, 'invalid-pr-number')
+    assert.equal(resolved.prNumber, null)
+    assert.equal(resolved.lookupProblem.kind, 'invalid-pr-number')
+  })
+}
+
+test('pr-number with surrounding whitespace is a valid override', async () => {
+  const calls = []
+  const resolved = await resolvePull({
+    eventAction: 'synchronize',
+    eventStack: null,
+    eventPrNumber: 42,
+    eventPrBaseRef: 'feat/auth',
+    prNumberOverride: ' 11 ',
+    repo: 'octo/hello',
+    token: 't',
+    fetchImpl: async (url) => {
+      calls.push(url)
+      return jsonResponse({ number: 11, base: { ref: 'main' }, stack: null })
+    },
+  })
+  assert.equal(resolved.prNumber, 11)
+  assert.match(calls[0], /\/pulls\/11$/)
+})
+
 test('resolveContext does not fetch the stack listing without a token', async () => {
   let fetches = 0
   const resolved = await resolveContext({

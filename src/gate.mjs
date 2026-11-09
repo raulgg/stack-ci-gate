@@ -56,7 +56,11 @@ function degradedHint(problem) {
   if (problem.status === 403) {
     return 'Add pull-requests: read to the gate job. If it is already there, the token may have hit a rate limit.'
   }
-  if (problem.status === 404) return 'Add pull-requests: read to the gate job.'
+  if (problem.status === 404) {
+    return problem.prNumberOverride
+      ? 'Check pr-number, or add pull-requests: read to the gate job.'
+      : 'Add pull-requests: read to the gate job.'
+  }
   return 'This is usually temporary.'
 }
 
@@ -207,6 +211,11 @@ export async function run(env = process.env, deps = {}) {
 
   const eventName = env.GITHUB_EVENT_NAME || ''
   let event = {}
+  const prNumberRaw = inputValue(env, 'pr-number')
+  const hasPrNumberOverride = String(prNumberRaw ?? '').trim() !== ''
+  // The hint for a 404 depends on whether pr-number chose the pull request.
+  const withOverride = (problem) =>
+    problem && hasPrNumberOverride ? { ...problem, prNumberOverride: true } : problem
 
   try {
     if (!PR_EVENTS.has(eventName)) {
@@ -223,7 +232,6 @@ export async function run(env = process.env, deps = {}) {
 
     event = readEvent(env.GITHUB_EVENT_PATH)
     const pr = event.pull_request ?? {}
-    const prNumberRaw = inputValue(env, 'pr-number')
     const resolved = await resolveContext({
       eventAction: event.action,
       eventStack: pr.stack,
@@ -239,7 +247,6 @@ export async function run(env = process.env, deps = {}) {
       bottomN,
     })
 
-    const hasPrNumberOverride = String(prNumberRaw ?? '').trim() !== ''
     const labelNames = hasPrNumberOverride
       ? resolved.labels
       : applyLabelChange(resolved.labels, event.action, event.label?.name)
@@ -260,7 +267,7 @@ export async function run(env = process.env, deps = {}) {
       eventAction: event.action,
       source: resolved.source,
       eventStack: pr.stack,
-      problem: resolved.lookupProblem,
+      problem: withOverride(resolved.lookupProblem),
     })
     return { exitCode, result }
   } catch (err) {
@@ -270,7 +277,7 @@ export async function run(env = process.env, deps = {}) {
       eventName,
       eventAction: event?.action,
       source: 'error',
-      problem: { message, status: err?.status },
+      problem: withOverride({ message, status: err?.status }),
     })
     return { exitCode, result }
   }

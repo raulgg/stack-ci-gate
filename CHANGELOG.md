@@ -17,6 +17,7 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 ### Fixed
 
 - A missing token or a non-numeric `pr-number` no longer reports `not in a stack`.
+- A `pr-number` that is not a plain pull request number, such as `-3`, `0`, `1.5`, `0x10` or `1e3`, now runs CI and warns about the input. Before, `0x10` and `1e3` gated pull requests 16 and 1000, and the others failed on an API error.
 - `reason` names the failed lookup when remaining depth is unknown with `bottom-n` above 1.
 
 ## 1.1.0 - 2026-10-01

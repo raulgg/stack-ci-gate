@@ -1147,6 +1147,7 @@ for (const [status, hint] of [
     assert.match(warnings[0], hint)
     assert.match(summary, /## Action needed/)
     assert.match(summary, hint)
+    assert.doesNotMatch(warnings[0], /Check pr-number/)
   })
 }
 
@@ -1261,6 +1262,35 @@ test('a non-numeric pr-number warns and names the input', async () => {
   assert.match(out.reason, /pr-number/)
   assert.match(warnings[0], ANNOTATION)
   assert.match(warnings[0], /Set pr-number/)
+})
+
+for (const value of ['-3', '0', '1.5', '0x10', '1e3']) {
+  test(`pr-number ${JSON.stringify(value)} fails open with the pr-number hint`, async () => {
+    const { out, warnings, summary } = await runCaptured(
+      tempDir(),
+      midStackEvent(),
+      { 'INPUT_PR-NUMBER': value },
+      async () => {
+        throw new Error('no fetch')
+      },
+    )
+    assert.equal(out['should-run'], 'true')
+    assert.match(out.reason, /could not read the stack.*pr-number/)
+    assert.match(warnings[0], /Set pr-number to a pull request number/)
+    assert.match(summary, /## Action needed/)
+  })
+}
+
+test('a 404 with pr-number set names the input in the hint', async () => {
+  const { out, warnings, summary } = await runCaptured(
+    tempDir(),
+    unstackedEvent,
+    { 'INPUT_PR-NUMBER': '999' },
+    async () => jsonResponse({ message: 'Not Found' }, 404),
+  )
+  assert.equal(out['should-run'], 'true')
+  assert.match(warnings[0], /Check pr-number, or add pull-requests: read to the gate job\./)
+  assert.match(summary, /Check pr-number, or add pull-requests: read/)
 })
 
 test('invalid stack metadata warns', async () => {

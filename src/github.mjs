@@ -85,6 +85,9 @@ function shouldRetryForStack(eventAction) {
   return eventAction === 'opened' || eventAction === 'reopened'
 }
 
+/** A pull request number: digits only, no sign, no leading zero. */
+const PR_NUMBER_PATTERN = /^[1-9]\d*$/
+
 /**
  * Event stack is missing on `opened` (PR is created, then stacked). Fetch the
  * PR resource, and retry briefly on opened/reopened. A pr_number override
@@ -108,6 +111,15 @@ export async function resolvePull({
   timeoutMs = FETCH_TIMEOUT_MS,
 }) {
   const override = String(prNumberOverride ?? '').trim()
+  if (override && !PR_NUMBER_PATTERN.test(override)) {
+    return {
+      prNumber: null,
+      prBaseRef: eventPrBaseRef ?? '',
+      stack: null,
+      labels: [],
+      source: 'invalid-pr-number',
+    }
+  }
   const prNumber = override
     ? Number(override)
     : eventPrNumber == null || eventPrNumber === ''
@@ -131,7 +143,7 @@ export async function resolvePull({
       prBaseRef: eventPrBaseRef ?? '',
       stack: null,
       labels: [],
-      source: override ? 'invalid-pr-number' : 'none',
+      source: 'none',
     }
   }
 
@@ -180,7 +192,7 @@ export async function resolvePull({
 
 function pullLookupProblem(pull, token, bottomN) {
   if (pull.source === 'invalid-pr-number') {
-    return { kind: 'invalid-pr-number', message: 'pr-number is not a number' }
+    return { kind: 'invalid-pr-number', message: 'pr-number is not a pull request number' }
   }
   if (!token && (pull.source === 'no-token' || (bottomN > 1 && pull.stack != null))) {
     return { kind: 'no-token', message: 'no token to read the stack' }
