@@ -48,7 +48,9 @@ function degradedHint(problem) {
   if (problem == null) {
     return 'GitHub sent stack data this action could not use. Update to the latest release.'
   }
-  if (problem.kind === 'no-token') return 'Set github-token on the gate step.'
+  if (problem.kind === 'no-token') {
+    return 'github-token is empty. Use the default token, or note that pull requests from forks do not get secrets.'
+  }
   if (problem.kind === 'invalid-pr-number') {
     return 'Set pr-number to a pull request number, or leave it unset.'
   }

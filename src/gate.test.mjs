@@ -1242,7 +1242,10 @@ test('no token with bottom-n=2 names the token as the cause', async () => {
   )
   assert.equal(out['should-run'], 'true')
   assert.match(out.reason, /could not determine remaining stack depth.*no token/)
-  assert.match(warnings[0], /github-token/)
+  assert.match(
+    warnings[0],
+    /github-token is empty\. Use the default token, or note that pull requests from forks do not get secrets\.$/,
+  )
 })
 
 test('a non-numeric pr-number warns and names the input', async () => {
