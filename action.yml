@@ -18,6 +18,10 @@ inputs:
     description: Pull request label that forces a mid-stack run. Empty disables it.
     required: false
     default: 'stack-ci:run'
+  stack-wait-seconds:
+    description: On opened or reopened, seconds to wait for the stack when the base is not the default branch (0-300)
+    required: false
+    default: '40'
   github-token:
     description: Token used to read pull request stack metadata
     required: false

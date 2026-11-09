@@ -100,13 +100,14 @@ Jobs that should still run on every layer, such as lint or labeler, omit `needs:
 
 ### Inputs
 
-| Name               | Default               | Purpose                                                                          |
-| ------------------ | --------------------- | -------------------------------------------------------------------------------- |
-| `bottom-n`         | `1`                   | How many PRs at the remaining bottom always run.                                 |
-| `run-top`          | `true`                | Also run the top PR (the full set of changes).                                   |
-| `force-run-label`  | `stack-ci:run`        | Label that forces a mid-stack run. Create it in the repo. Empty disables.       |
-| `github-token`     | `${{ github.token }}` | Reads stack membership. Needs `pull-requests: read` on the gate job.            |
-| `pr-number`        | event PR              | Override which PR to gate on `pull_request`. Leave unset in the recipe.         |
+| Name                 | Default               | Purpose                                                                                     |
+| -------------------- | --------------------- | ------------------------------------------------------------------------------------------- |
+| `bottom-n`           | `1`                   | How many PRs at the remaining bottom always run.                                            |
+| `run-top`            | `true`                | Also run the top PR (the full set of changes).                                              |
+| `force-run-label`    | `stack-ci:run`        | Label that forces a mid-stack run. Create it in the repo. Empty disables.                   |
+| `stack-wait-seconds` | `40`                  | Seconds to wait for the stack on `opened` and `reopened` into a non-default base. 0 to 300. |
+| `github-token`       | `${{ github.token }}` | Reads stack membership. Needs `pull-requests: read` on the gate job.                        |
+| `pr-number`          | event PR              | Override which PR to gate on `pull_request`. Leave unset in the recipe.                     |
 
 ### Outputs
 
@@ -151,6 +152,8 @@ The gate job only runs when the workflow starts. List every type this action nee
 | `edited` | After a bottom merge, the next PR is retargeted at the stack base. That remaining bottom needs a run. |
 | `stacked` | `gh stack link` on PRs that already existed. |
 | `labeled` | Force-run without a push. Any added label starts a run. Only the force-run label turns a skip into a run. Leave this type out when you will not use the force-run label. |
+
+`gh stack submit` opens every PR first and links the stack afterwards, so the `opened` event has no stack yet. A PR into the default branch runs either way, so the gate does not wait for it. For any other base, the gate polls for the stack for up to `stack-wait-seconds`. A PR into another branch that never joins a stack waits the full 40 seconds on `opened` and `reopened`. Lower `stack-wait-seconds` to avoid that. Raise it if mid-stack PRs from a large `gh stack submit` still run. In a single-job layout the wait blocks the job, so put the gate step after the steps that run on every layer.
 
 GitHub's default is `opened`, `synchronize`, `reopened`. Without `edited`, a remaining-bottom retarget never starts the gate. Without `stacked`, linking already-open PRs never starts it. A workflow that leaves out `labeled` still force-runs on the next push while the label is on the pull request.
 

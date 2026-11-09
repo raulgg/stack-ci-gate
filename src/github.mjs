@@ -6,6 +6,26 @@ export const FETCH_TIMEOUT_MS = 15_000
 /** Immediate fetch, then backoff. Total wait ~6s so `opened` can see the stack. */
 export const OPENED_RETRY_DELAYS_MS = [0, 1000, 2000, 3000]
 
+/** Default wait when the base is not the default branch. `gh stack submit` links the stack after it opens every PR. */
+export const DEFAULT_STACK_WAIT_MS = 40_000
+
+/** Waits up to this long count as the short retry, which stays quiet when it runs out. */
+const SHORT_WAIT_MS = OPENED_RETRY_DELAYS_MS.reduce((sum, ms) => sum + ms, 0)
+
+/** 0, 1, 2, 3 s, then every 5 s, until the delays add up to totalMs. */
+export function stackWaitDelays(totalMs) {
+  const delays = [0]
+  let waited = 0
+  let step = 0
+  while (waited < totalMs) {
+    const next = [1000, 2000, 3000][step++] ?? 5000
+    const delay = Math.min(next, totalMs - waited)
+    delays.push(delay)
+    waited += delay
+  }
+  return delays
+}
+
 /** Open PRs, from the start of the list, are remaining-bottom first. */
 export function remainingDepthFromStackPulls(pulls, prNumber) {
   if (!Array.isArray(pulls)) return null
@@ -100,8 +120,29 @@ function shouldRetryForStack(eventAction) {
 const PR_NUMBER_PATTERN = /^[1-9]\d*$/
 
 /**
+ * A PR into the default branch is standalone or the remaining bottom, and runs
+ * either way, so it does not wait. Any other base may become mid-stack once
+ * `gh stack submit` links the stack, so it waits up to stackWaitMs.
+ */
+function openedDelays({
+  eventAction,
+  override,
+  eventPrBaseRef,
+  defaultBranch,
+  stackWaitMs,
+  retryDelaysMs,
+}) {
+  if (!shouldRetryForStack(eventAction)) return [0]
+  if (!override && defaultBranch && eventPrBaseRef === defaultBranch) return [0]
+  if (retryDelaysMs) return retryDelaysMs
+  return stackWaitDelays(stackWaitMs)
+}
+
+/**
  * Event stack is missing on `opened` (PR is created, then stacked). Fetch the
- * PR resource, and retry briefly on opened/reopened. A pr_number override
+ * PR resource, and on opened/reopened poll for the stack unless the base is
+ * the default branch. waitedMs is the time slept; stackWaitTimedOut is true
+ * when a wait longer than the short retry ended without a stack. A pr_number override
  * always uses the API and ignores the triggering event's stack.
  * Labels come from that same pull request: the event payload when its stack
  * is used, otherwise the fetched body.
@@ -118,7 +159,9 @@ export async function resolvePull({
   apiUrl = DEFAULT_API,
   fetchImpl = globalThis.fetch,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  retryDelaysMs = OPENED_RETRY_DELAYS_MS,
+  retryDelaysMs,
+  defaultBranch = '',
+  stackWaitMs = DEFAULT_STACK_WAIT_MS,
   timeoutMs = FETCH_TIMEOUT_MS,
 }) {
   const override = String(prNumberOverride ?? '').trim()
@@ -168,10 +211,21 @@ export async function resolvePull({
     }
   }
 
-  const delays = shouldRetryForStack(eventAction) ? retryDelaysMs : [0]
+  const delays = openedDelays({
+    eventAction,
+    override,
+    eventPrBaseRef,
+    defaultBranch,
+    stackWaitMs,
+    retryDelaysMs,
+  })
   let lastPr = null
+  let waitedMs = 0
   for (let i = 0; i < delays.length; i++) {
-    if (delays[i] > 0) await sleep(delays[i])
+    if (delays[i] > 0) {
+      await sleep(delays[i])
+      waitedMs += delays[i]
+    }
     try {
       lastPr = await fetchPullRequest({
         apiUrl,
@@ -192,6 +246,7 @@ export async function resolvePull({
         stack,
         labels: labelNamesFrom(lastPr.labels),
         source: 'api',
+        waitedMs,
       }
     }
   }
@@ -202,6 +257,8 @@ export async function resolvePull({
     stack: null,
     labels: labelNamesFrom(lastPr?.labels),
     source: 'api',
+    waitedMs,
+    stackWaitTimedOut: waitedMs > SHORT_WAIT_MS,
   }
 }
 
@@ -238,6 +295,8 @@ export async function resolveContext({
   fetchImpl = globalThis.fetch,
   sleep,
   retryDelaysMs,
+  defaultBranch,
+  stackWaitMs,
   timeoutMs = FETCH_TIMEOUT_MS,
   bottomN,
 }) {
@@ -254,6 +313,8 @@ export async function resolveContext({
     fetchImpl,
     sleep,
     retryDelaysMs,
+    defaultBranch,
+    stackWaitMs,
     timeoutMs,
   })
 

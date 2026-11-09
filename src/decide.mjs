@@ -28,6 +28,18 @@ export function parseRunTop(raw) {
   throw new ConfigError(`run-top must be true or false, got ${JSON.stringify(raw)}`)
 }
 
+/** Seconds `opened` waits for the stack when the base is not the default branch. */
+export function parseStackWaitSeconds(raw) {
+  const s = String(raw ?? '40').trim()
+  if (s === '') return 40
+  if (!/^\d+$/.test(s) || Number(s) > 300) {
+    throw new ConfigError(
+      `stack-wait-seconds must be an integer from 0 to 300, got ${JSON.stringify(raw)}`,
+    )
+  }
+  return Number(s)
+}
+
 /** Blank input disables force-run. A missing input keeps the action default. */
 export function parseForceRunLabel(raw) {
   if (raw == null) return 'stack-ci:run'

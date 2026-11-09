@@ -8,6 +8,7 @@ import {
   parseBottomN,
   parseForceRunLabel,
   parseRunTop,
+  parseStackWaitSeconds,
 } from './decide.mjs'
 import { resolveContext } from './github.mjs'
 
@@ -46,6 +47,20 @@ function annotation(level, text) {
 
 function isTransient(problem) {
   return problem.status === 429 || problem.status >= 500 || problem.network === true
+}
+
+/** Keys of an `edited` payload's changes, such as base or title. Values are not logged. */
+function changeKeys(changes) {
+  if (changes == null || typeof changes !== 'object') return ''
+  return Object.keys(changes)
+    .filter((key) => /^[a-z_]+$/.test(key))
+    .sort()
+    .join(',')
+}
+
+function formatSeconds(ms) {
+  const seconds = Math.round(ms / 100) / 10
+  return `${seconds} s`
 }
 
 function degradedHint(problem) {
@@ -149,6 +164,7 @@ function summaryMarkdown({ result, trace }) {
     ['Event', summaryCell(eventLabel(trace))],
     ['Stack source', summaryCell(trace.source || 'unknown')],
   ]
+  if (trace.waitedMs > 0) rows.push(['Waited for stack', formatSeconds(trace.waitedMs)])
   if (trace.problem) {
     const field = trace.problem.lookup ? 'Stack lookup' : 'Error'
     rows.push([field, summaryCell(trace.problem.message)])
@@ -195,7 +211,7 @@ function writeOutputs(outputPath, result, log, trace = {}) {
   appendOutput(outputPath, 'size', result.size ?? '')
   log.log(reason)
   log.log(
-    `gate-trace event=${trace.eventName ?? ''} action=${trace.eventAction ?? ''} source=${trace.source ?? ''} event_stack=${trace.eventStack ? 'yes' : 'no'}`,
+    `gate-trace event=${trace.eventName ?? ''} action=${trace.eventAction ?? ''} source=${trace.source ?? ''} event_stack=${trace.eventStack ? 'yes' : 'no'} changes=${changeKeys(trace.changes)} waited_ms=${trace.waitedMs ?? 0}`,
   )
 }
 
@@ -220,16 +236,24 @@ export async function run(env = process.env, deps = {}) {
       )
     }
     reportProblem(log, result, trace)
+    // A long wait that found no stack is expected for a standalone PR, so it only logs.
+    if (trace.stackWaitTimedOut && !result.is_stacked) {
+      log.log(
+        `Waited ${formatSeconds(trace.waitedMs)} for a stack and found none, so this runs as a standalone pull request. A pull request from a large gh stack submit can need a higher stack-wait-seconds.`,
+      )
+    }
     writeJobSummary(env.GITHUB_STEP_SUMMARY, { result, trace }, log)
   }
 
   let bottomN
   let runTop
   let forceRunLabel
+  let stackWaitSeconds
   try {
     bottomN = parseBottomN(inputValue(env, 'bottom-n'))
     runTop = parseRunTop(inputValue(env, 'run-top'))
     forceRunLabel = parseForceRunLabel(inputValue(env, 'force-run-label'))
+    stackWaitSeconds = parseStackWaitSeconds(inputValue(env, 'stack-wait-seconds'))
   } catch (err) {
     if (err instanceof ConfigError) {
       log.error(annotation('error', err.message))
@@ -278,6 +302,9 @@ export async function run(env = process.env, deps = {}) {
       fetchImpl,
       sleep,
       bottomN,
+      retryDelaysMs: deps.retryDelaysMs,
+      defaultBranch: event.repository?.default_branch ?? '',
+      stackWaitMs: stackWaitSeconds * 1000,
     })
 
     const labelNames = hasPrNumberOverride
@@ -301,6 +328,9 @@ export async function run(env = process.env, deps = {}) {
       eventAction: event.action,
       source: resolved.source,
       eventStack: pr.stack,
+      changes: event.changes,
+      waitedMs: resolved.waitedMs,
+      stackWaitTimedOut: resolved.stackWaitTimedOut,
       problem: withOverride(resolved.lookupProblem),
     })
     return { exitCode, result }
