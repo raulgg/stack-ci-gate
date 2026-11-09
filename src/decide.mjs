@@ -159,20 +159,21 @@ export function decide({
     return { should_run: true, reason, ...diag }
   }
 
+  // The label decides before an unknown depth, so a labeled PR is not degraded.
+  if (hasForceRunLabel(labelNames, forceRunLabel)) {
+    return {
+      should_run: true,
+      reason: `force-run label ${forceRunLabel}`,
+      ...diag,
+    }
+  }
+
   if (bottomN > 1 && (depth == null || !Number.isFinite(depth))) {
     const cause = lookupProblem ? ` (${lookupProblem})` : ''
     return {
       should_run: true,
       reason: `could not determine remaining stack depth; running CI${cause}`,
       degraded: true,
-      ...diag,
-    }
-  }
-
-  if (hasForceRunLabel(labelNames, forceRunLabel)) {
-    return {
-      should_run: true,
-      reason: `force-run label ${forceRunLabel}`,
       ...diag,
     }
   }

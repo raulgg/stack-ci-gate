@@ -335,7 +335,7 @@ test('bottom-n match keeps the remaining-depth reason when the label is present'
   assert.doesNotMatch(result.reason, /force-run/)
 })
 
-test('unknown remaining depth keeps the fail-open reason when the label is present', () => {
+test('unknown remaining depth runs because of the force-run label, not degraded', () => {
   const result = decide({
     ...defaults,
     ...force,
@@ -343,10 +343,24 @@ test('unknown remaining depth keeps the fail-open reason when the label is prese
     stack: stackOf({ position: 2, size: 4 }),
     prBaseRef: 'feat/auth',
     remainingDepth: null,
+    lookupProblem: 'GET /stacks/50 → 403',
+  })
+  assert.equal(result.should_run, true)
+  assert.equal(result.reason, FORCE_REASON)
+  assert.equal(result.degraded, undefined)
+})
+
+test('unknown remaining depth without the label stays degraded', () => {
+  const result = decide({
+    ...defaults,
+    bottomN: 2,
+    stack: stackOf({ position: 2, size: 4 }),
+    prBaseRef: 'feat/auth',
+    remainingDepth: null,
   })
   assert.equal(result.should_run, true)
   assert.match(result.reason, /could not determine remaining stack depth/)
-  assert.doesNotMatch(result.reason, /force-run/)
+  assert.equal(result.degraded, true)
 })
 
 test('standalone keeps its reason when the force-run label is present', () => {

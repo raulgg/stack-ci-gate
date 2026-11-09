@@ -784,26 +784,6 @@ test('opened without event stack uses labels from the pull request fetch', async
   assert.equal(result.reason, 'force-run label stack-ci:run')
 })
 
-test('unknown depth fail-open keeps its reason when the force-run label is present', async () => {
-  const dir = tempDir()
-  const { result, out } = await runPull(
-    dir,
-    midStackEvent({
-      labels: [{ name: 'stack-ci:run' }],
-      number: 12,
-      position: 2,
-      size: 4,
-    }),
-    { 'INPUT_BOTTOM-N': '2' },
-    async () => jsonResponse({ message: 'nope' }, 500),
-  )
-  assert.equal(result.should_run, true)
-  assert.match(result.reason, /could not determine remaining stack depth/)
-  assert.doesNotMatch(result.reason, /force-run/)
-  assert.match(out.reason, /could not determine remaining stack depth/)
-  assert.doesNotMatch(out.reason, /force-run/)
-})
-
 test('force-run reason neutralizes workflow commands in the label name', async () => {
   const dir = tempDir()
   const { out, env } = await runPull(
@@ -1217,6 +1197,21 @@ for (const [name, payload] of [
     assert.doesNotMatch(summary, /Action needed/)
   })
 }
+
+test('a failed stack lookup on a force-run labeled mid-stack PR only logs', async () => {
+  const { out, warnings, logs, summary } = await runCaptured(
+    tempDir(),
+    midStackEvent({ labels: [{ name: 'stack-ci:run' }] }),
+    { 'INPUT_BOTTOM-N': '2' },
+    async () => jsonResponse({ message: 'nope' }, 403),
+  )
+  assert.equal(out['should-run'], 'true')
+  assert.equal(out.reason, 'force-run label stack-ci:run')
+  assert.deepEqual(warnings, [])
+  assert.match(logs.join('\n'), /Stack lookup failed.*→ 403/)
+  assert.match(summary, /\| Stack lookup \| GET .*→ 403 \|/)
+  assert.doesNotMatch(summary, /Action needed/)
+})
 
 test('no token and no event stack warns instead of reporting a standalone PR', async () => {
   const { out, warnings, summary } = await runCaptured(

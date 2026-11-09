@@ -12,6 +12,7 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 ### Changed
 
 - A failed output write adds a `Stack CI Gate` error annotation that says `should-run` is empty, and the gate step still fails.
+- With `bottom-n` above 1, the force-run label is checked before an unknown remaining depth, so a labeled mid-stack pull request reports `force-run label …` and does not warn when the stack lookup fails.
 
 ### Fixed
 
