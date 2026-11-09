@@ -71,13 +71,20 @@ function degradedCause(result, problem) {
   return result.reason === INVALID_STACK_REASON ? null : problem
 }
 
-function reportProblem(log, result, problem) {
-  if (result.degraded) {
+function actionHint(result, trace) {
+  if (trace.source === 'invalid-input') return 'Check the input values on the gate step.'
+  return degradedHint(degradedCause(result, trace.problem))
+}
+
+function reportProblem(log, result, trace) {
+  const problem = trace.problem
+  // Invalid input already logged an error annotation with the cause.
+  if (result.degraded && trace.source !== 'invalid-input') {
     const cause = degradedCause(result, problem)
     log.warn(
       annotation(
         'warning',
-        `Could not gate stacked CI; running checks by default. (${cause?.message ?? result.reason}) ${degradedHint(cause)}`,
+        `Could not gate stacked CI; running checks by default. (${cause?.message ?? result.reason}) ${actionHint(result, trace)}`,
       ),
     )
   } else if (problem) {
@@ -129,7 +136,7 @@ function summaryMarkdown({ result, trace }) {
     markdown += `| ${field} | ${value} |\n`
   }
   if (result.degraded) {
-    markdown += `\n## Action needed\n\nCI ran because the gate could not decide. ${degradedHint(degradedCause(result, trace.problem))}\n`
+    markdown += `\n## Action needed\n\nCI ran because the gate could not decide. ${actionHint(result, trace)}\n`
   }
   return markdown
 }
@@ -190,7 +197,7 @@ export async function run(env = process.env, deps = {}) {
         ),
       )
     }
-    reportProblem(log, result, trace.problem)
+    reportProblem(log, result, trace)
     writeJobSummary(env.GITHUB_STEP_SUMMARY, { result, trace }, log)
   }
 
@@ -203,8 +210,10 @@ export async function run(env = process.env, deps = {}) {
     forceRunLabel = parseForceRunLabel(inputValue(env, 'force-run-label'))
   } catch (err) {
     if (err instanceof ConfigError) {
-      log.error(`::error::${safeText(err.message)}`)
-      const result = failOpen(`invalid input; running CI (${safeText(err.message)})`)
+      log.error(annotation('error', err.message))
+      const result = failOpen(`invalid input; running CI (${safeText(err.message)})`, {
+        degraded: true,
+      })
       write(result, { eventName: env.GITHUB_EVENT_NAME || '', source: 'invalid-input' })
       return { exitCode, result, error: err }
     }

@@ -908,6 +908,42 @@ test('invalid input summary still runs and does not throw', async () => {
   assert.match(summary, /\| Reason \| invalid input; running CI/)
   assert.match(summary, /\| Event \| pull_request \|/)
   assert.match(summary, /\| Stack source \| invalid-input \|/)
+  assert.match(
+    summary,
+    /## Action needed\n\nCI ran because the gate could not decide\. Check the input values on the gate step\./,
+  )
+  assert.doesNotMatch(summary, /Stack lookup/)
+})
+
+test('invalid input is one escaped error annotation and no warning', async () => {
+  const dir = tempDir()
+  const errors = []
+  const warnings = []
+  const env = baseEnv(dir, {
+    'INPUT_BOTTOM-N': '50%0A::notice::x',
+    GITHUB_EVENT_NAME: 'pull_request',
+  })
+  const { exitCode, result } = await run(env, {
+    log: {
+      log() {},
+      warn(msg) {
+        warnings.push(String(msg))
+      },
+      error(msg) {
+        errors.push(String(msg))
+      },
+    },
+  })
+  assert.equal(exitCode, 0)
+  assert.equal(result.should_run, true)
+  assert.equal(result.degraded, true)
+  assert.deepEqual(warnings, [])
+  assert.equal(errors.length, 1)
+  assert.match(errors[0], /^::error title=Stack CI Gate::bottom-n must be a non-negative integer/)
+  const body = errors[0].replace(/^::error title=Stack CI Gate::/, '')
+  assert.doesNotMatch(body, /::/)
+  assert.doesNotMatch(body, /%0A/)
+  assert.match(body, /50%250A/)
 })
 
 test('a job summary write failure does not change should-run', async () => {
