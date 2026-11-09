@@ -1276,6 +1276,23 @@ test('invalid stack metadata warns', async () => {
   assert.match(summary, /## Action needed/)
 })
 
+test('invalid stack metadata with a failed lookup names the bad data, not the lookup', async () => {
+  const { out, warnings, summary } = await runCaptured(
+    tempDir(),
+    midStackEvent({ position: 'nope' }),
+    { 'INPUT_BOTTOM-N': '2' },
+    async () => jsonResponse({ message: 'nope' }, 403),
+  )
+  assert.equal(out['should-run'], 'true')
+  assert.equal(out.reason, 'invalid stack metadata; running CI')
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /\(invalid stack metadata; running CI\)/)
+  assert.match(warnings[0], /Update to the latest release\./)
+  assert.doesNotMatch(warnings[0], /pull-requests: read|→ 403/)
+  assert.match(summary, /## Action needed\n\nCI ran because the gate could not decide\. GitHub sent stack data/)
+  assert.doesNotMatch(summary.split('## Action needed')[1], /pull-requests: read/)
+})
+
 test('a stack listing without this PR warns with bottom-n=2', async () => {
   const { out, warnings } = await runCaptured(
     tempDir(),

@@ -7,6 +7,8 @@ export class ConfigError extends Error {
 
 export const PR_EVENTS = new Set(['pull_request', 'pull_request_target'])
 
+export const INVALID_STACK_REASON = 'invalid stack metadata; running CI'
+
 export function parseBottomN(raw) {
   const s = String(raw ?? '1').trim()
   if (s === '') return 1
@@ -134,7 +136,7 @@ export function decide({
   if (!stackLooksValid(stack) || !prBaseRef) {
     return {
       should_run: true,
-      reason: 'invalid stack metadata; running CI',
+      reason: INVALID_STACK_REASON,
       degraded: true,
       ...diag,
     }

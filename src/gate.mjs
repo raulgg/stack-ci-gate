@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import {
   ConfigError,
+  INVALID_STACK_REASON,
   PR_EVENTS,
   decide,
   failOpen,
@@ -59,13 +60,18 @@ function degradedHint(problem) {
   return 'This is usually temporary.'
 }
 
+/** The lookup problem behind a degraded result. Bad stack data is its own cause. */
+function degradedCause(result, problem) {
+  return result.reason === INVALID_STACK_REASON ? null : problem
+}
+
 function reportProblem(log, result, problem) {
   if (result.degraded) {
-    const cause = problem?.message ?? result.reason
+    const cause = degradedCause(result, problem)
     log.warn(
       annotation(
         'warning',
-        `Could not gate stacked CI; running checks by default. (${cause}) ${degradedHint(problem)}`,
+        `Could not gate stacked CI; running checks by default. (${cause?.message ?? result.reason}) ${degradedHint(cause)}`,
       ),
     )
   } else if (problem) {
@@ -117,7 +123,7 @@ function summaryMarkdown({ result, trace }) {
     markdown += `| ${field} | ${value} |\n`
   }
   if (result.degraded) {
-    markdown += `\n## Action needed\n\nCI ran because the gate could not decide. ${degradedHint(trace.problem)}\n`
+    markdown += `\n## Action needed\n\nCI ran because the gate could not decide. ${degradedHint(degradedCause(result, trace.problem))}\n`
   }
   return markdown
 }
