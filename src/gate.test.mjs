@@ -1129,12 +1129,15 @@ async function runCaptured(dir, payload, envExtra, fetch) {
   })
   const logs = []
   const warnings = []
+  const errors = []
   const { exitCode, result } = await run(env, {
     log: {
       log(msg) {
         logs.push(String(msg))
       },
-      error() {},
+      error(msg) {
+        errors.push(String(msg))
+      },
       warn(msg) {
         warnings.push(String(msg))
       },
@@ -1147,6 +1150,7 @@ async function runCaptured(dir, payload, envExtra, fetch) {
     result,
     logs,
     warnings,
+    errors,
     out: parseOutputs(env.GITHUB_OUTPUT),
     summary: fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8'),
   }
@@ -1221,7 +1225,7 @@ for (const [name, payload] of [
   ['top', midStackEvent({ position: 3 })],
 ]) {
   test(`a failed stack lookup on the ${name} only logs with bottom-n=2`, async () => {
-    const { out, warnings, logs, summary } = await runCaptured(
+    const { out, warnings, errors, logs, summary } = await runCaptured(
       tempDir(),
       payload,
       { 'INPUT_BOTTOM-N': '2' },
@@ -1229,6 +1233,7 @@ for (const [name, payload] of [
     )
     assert.equal(out['should-run'], 'true')
     assert.deepEqual(warnings, [])
+    assert.deepEqual(errors, [])
     assert.match(logs.join('\n'), /Stack lookup failed.*→ 403/)
     assert.match(summary, /\| Stack lookup \| GET .*→ 403 \|/)
     assert.doesNotMatch(summary, /Action needed/)
@@ -1236,7 +1241,7 @@ for (const [name, payload] of [
 }
 
 test('a failed stack lookup on a force-run labeled mid-stack PR only logs', async () => {
-  const { out, warnings, logs, summary } = await runCaptured(
+  const { out, warnings, errors, logs, summary } = await runCaptured(
     tempDir(),
     midStackEvent({ labels: [{ name: 'stack-ci:run' }] }),
     { 'INPUT_BOTTOM-N': '2' },
@@ -1245,6 +1250,7 @@ test('a failed stack lookup on a force-run labeled mid-stack PR only logs', asyn
   assert.equal(out['should-run'], 'true')
   assert.equal(out.reason, 'force-run label stack-ci:run')
   assert.deepEqual(warnings, [])
+  assert.deepEqual(errors, [])
   assert.match(logs.join('\n'), /Stack lookup failed.*→ 403/)
   assert.match(summary, /\| Stack lookup \| GET .*→ 403 \|/)
   assert.doesNotMatch(summary, /Action needed/)
@@ -1384,6 +1390,7 @@ test('standalone pull requests and normal skips stay quiet', async () => {
   assert.equal(standalone.out['should-run'], 'true')
   assert.equal(standalone.out.reason, 'not in a stack; running CI')
   assert.deepEqual(standalone.warnings, [])
+  assert.deepEqual(standalone.errors, [])
   assert.doesNotMatch(standalone.summary, /Action needed|Stack lookup/)
 
   const skipped = await runCaptured(
@@ -1396,7 +1403,64 @@ test('standalone pull requests and normal skips stay quiet', async () => {
   )
   assert.equal(skipped.out['should-run'], 'false')
   assert.deepEqual(skipped.warnings, [])
+  assert.deepEqual(skipped.errors, [])
   assert.doesNotMatch(skipped.summary, /Action needed|Stack lookup/)
+})
+
+test('opened with no stack after the retries stays quiet', async () => {
+  let fetches = 0
+  const { out, warnings, errors, summary } = await runCaptured(
+    tempDir(),
+    { action: 'opened', pull_request: { number: 42, base: { ref: 'feat/auth' }, stack: null } },
+    {},
+    async () => {
+      fetches += 1
+      return jsonResponse({ number: 42, base: { ref: 'feat/auth' }, stack: null })
+    },
+  )
+  assert.ok(fetches > 1)
+  assert.equal(out['should-run'], 'true')
+  assert.equal(out.reason, 'not in a stack; running CI')
+  assert.deepEqual(warnings, [])
+  assert.deepEqual(errors, [])
+  assert.doesNotMatch(summary, /Action needed|Stack lookup/)
+})
+
+for (const eventName of ['merge_group', 'push']) {
+  test(`${eventName} stays quiet`, async () => {
+    const { out, warnings, errors, summary } = await runCaptured(
+      tempDir(),
+      {},
+      { GITHUB_EVENT_NAME: eventName },
+      async () => {
+        throw new Error('no fetch')
+      },
+    )
+    assert.equal(out['should-run'], 'true')
+    assert.deepEqual(warnings, [])
+    assert.deepEqual(errors, [])
+    assert.doesNotMatch(summary, /Action needed|Stack lookup/)
+  })
+}
+
+test('annotations keep literal newlines and a lone % on one escaped line', async () => {
+  const { warnings, errors, summary } = await runCaptured(
+    tempDir(),
+    unstackedEvent,
+    {},
+    async () => {
+      throw new Error('line one\nline two\r::notice::x 100% done')
+    },
+  )
+  assert.deepEqual(errors, [])
+  assert.equal(warnings.length, 1)
+  assert.doesNotMatch(warnings[0], /[\r\n]/)
+  const body = warnings[0].replace(ANNOTATION, '')
+  assert.match(body, /line one line two/)
+  assert.match(body, /100%25 done/)
+  assert.doesNotMatch(body, /%(?!25)/)
+  assert.doesNotMatch(body, /::/)
+  assert.match(summary, /\| Reason \| error; running CI \(line one line two : :notice: :x 100% done\) \|/)
 })
 
 test('annotations neutralize workflow commands and encoded newlines', async () => {
