@@ -135,7 +135,7 @@ All outputs are strings. Compare them with `== 'true'` or `== 'false'`. Gate job
 
 Remaining bottom is the PR whose base is the stack base. After a partial merge, remaining bottom is not `position == 1`. A 1-PR stack is both bottom and top.
 
-The gate step writes a job summary with the decision and, when known, the remaining depth and the remaining-bottom and top pull request numbers.
+The gate step writes a job summary on the workflow run page with the decision, the reason, and the stack position.
 
 The label stays until someone removes it, and it can only turn a skip into a run.
 

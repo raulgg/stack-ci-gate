@@ -38,13 +38,6 @@ function safeText(text) {
   return oneLine(text).replaceAll('::', ': :').replaceAll('##[', '# [')
 }
 
-function formatRemainingDepth(depth) {
-  if (depth == null || depth === '') return ''
-  const n = Number(depth)
-  if (!Number.isInteger(n) || n < 1) return ''
-  return String(n)
-}
-
 function yesNo(value) {
   return value ? 'yes' : 'no'
 }
@@ -58,18 +51,6 @@ function summaryCell(value) {
   return safeText(value).replaceAll('|', '/')
 }
 
-const SAFE_REPO = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+$/
-
-function pullLink(repo, number) {
-  const n = Number(number)
-  if (!Number.isInteger(n) || n < 1) return ''
-  const label = `#${n}`
-  if (typeof repo === 'string' && SAFE_REPO.test(repo)) {
-    return `[${label}](/${repo}/pull/${n})`
-  }
-  return label
-}
-
 function eventLabel(trace) {
   const name = trace.eventName ? safeText(trace.eventName) : ''
   const action = trace.eventAction ? safeText(trace.eventAction) : ''
@@ -77,34 +58,13 @@ function eventLabel(trace) {
   return name || action || 'unknown'
 }
 
-function whereGatedCiRuns(trace, repo, runTop) {
-  const { remainingBottomNumber, topNumber, prNumber, remainingDepth } = trace
-  if (remainingBottomNumber == null) return ''
-  const depth = formatRemainingDepth(remainingDepth)
-  const role = (number) =>
-    Number(number) === Number(prNumber) ? 'this pull request' : 'other'
-  const lines = [
-    `- Remaining bottom: ${pullLink(repo, remainingBottomNumber)} (${role(remainingBottomNumber)})`,
-  ]
-  if (runTop === true && topNumber != null) {
-    lines.push(`- Top: ${pullLink(repo, topNumber)} (${role(topNumber)})`)
-  }
-  if (Number.isInteger(Number(prNumber)) && Number(prNumber) >= 1) {
-    const suffix = depth === '' ? '' : `, remaining depth ${depth}`
-    lines.push(`- This pull request: ${pullLink(repo, prNumber)}${suffix}`)
-  }
-  return `## Where gated CI runs\n\n${lines.join('\n')}\n`
-}
-
-function summaryMarkdown({ result, trace, repo, runTop }) {
-  const depth = formatRemainingDepth(trace.remainingDepth)
+function summaryMarkdown({ result, trace }) {
   const rows = [
     ['Decision', result.should_run ? 'Run gated jobs' : 'Skip gated jobs'],
     ['Reason', summaryCell(result.reason)],
     ['Stacked', yesNo(result.is_stacked)],
     ['Remaining bottom', yesNo(result.is_bottom)],
     ['Top', yesNo(result.is_top)],
-    ['Remaining depth', depth === '' ? 'unknown' : depth],
     ['Position', knownOrUnknown(result.position)],
     ['Size', knownOrUnknown(result.size)],
     ['Event', summaryCell(eventLabel(trace))],
@@ -114,8 +74,6 @@ function summaryMarkdown({ result, trace, repo, runTop }) {
   for (const [field, value] of rows) {
     markdown += `| ${field} | ${value} |\n`
   }
-  const where = whereGatedCiRuns(trace, repo, runTop)
-  if (where) markdown += `\n${where}`
   return markdown.replaceAll('::', ': :').replaceAll('##[', '# [')
 }
 
@@ -142,7 +100,6 @@ function applyLabelChange(names, action, label) {
 
 function writeOutputs(outputPath, result, log, trace = {}) {
   const reason = safeText(result.reason)
-  const remainingDepth = formatRemainingDepth(trace.remainingDepth)
   appendOutput(outputPath, 'should-run', stringifyBool(result.should_run))
   appendOutput(outputPath, 'reason', reason)
   appendOutput(outputPath, 'is-stacked', stringifyBool(result.is_stacked))
@@ -152,7 +109,7 @@ function writeOutputs(outputPath, result, log, trace = {}) {
   appendOutput(outputPath, 'size', result.size ?? '')
   log.log(reason)
   log.log(
-    `gate-trace event=${trace.eventName ?? ''} action=${trace.eventAction ?? ''} source=${trace.source ?? ''} event_stack=${trace.eventStack ? 'yes' : 'no'} remaining_depth=${remainingDepth}`,
+    `gate-trace event=${trace.eventName ?? ''} action=${trace.eventAction ?? ''} source=${trace.source ?? ''} event_stack=${trace.eventStack ? 'yes' : 'no'}`,
   )
 }
 
@@ -161,7 +118,6 @@ export async function run(env = process.env, deps = {}) {
   const sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
   const log = deps.log ?? console
   const outputPath = env.GITHUB_OUTPUT
-  let runTop = true
   const write = (result, trace = {}) => {
     try {
       writeOutputs(outputPath, result, log, trace)
@@ -169,14 +125,11 @@ export async function run(env = process.env, deps = {}) {
       const message = safeText(err instanceof Error ? err.message : String(err))
       log.warn(`Could not write gate outputs. (${message})`)
     }
-    writeJobSummary(
-      env.GITHUB_STEP_SUMMARY,
-      { result, trace, repo: env.GITHUB_REPOSITORY || '', runTop },
-      log,
-    )
+    writeJobSummary(env.GITHUB_STEP_SUMMARY, { result, trace }, log)
   }
 
   let bottomN
+  let runTop
   let forceRunLabel
   try {
     bottomN = parseBottomN(inputValue(env, 'bottom-n'))
@@ -222,6 +175,7 @@ export async function run(env = process.env, deps = {}) {
       apiUrl: env.GITHUB_API_URL || 'https://api.github.com',
       fetchImpl,
       sleep,
+      bottomN,
     })
 
     const hasPrNumberOverride = String(prNumberRaw ?? '').trim() !== ''
@@ -244,10 +198,6 @@ export async function run(env = process.env, deps = {}) {
       eventAction: event.action,
       source: resolved.source,
       eventStack: pr.stack,
-      remainingDepth: resolved.remainingDepth,
-      remainingBottomNumber: resolved.remainingBottomNumber,
-      topNumber: resolved.topNumber,
-      prNumber: resolved.prNumber,
     })
     return { exitCode: 0, result }
   } catch (err) {

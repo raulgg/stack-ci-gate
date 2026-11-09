@@ -6,7 +6,7 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 
 ### Added
 
-- The gate step writes a job summary with the decision and, when known, the remaining depth and the pull requests where gated CI runs.
+- The gate step writes a job summary with the decision, the reason, and the stack position.
 
 ## 1.1.0 - 2026-10-01
 
