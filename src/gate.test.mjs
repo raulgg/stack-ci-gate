@@ -447,7 +447,6 @@ test('event stack on synchronize fetches the stack listing, not the pull request
   )
   assert.equal(result.should_run, true)
   assert.equal(result.is_bottom, true)
-  assert.equal(parseOutputs(env.GITHUB_OUTPUT)['remaining-depth'], '')
 })
 
 test('bottom-n=2 with this PR missing from the stack list fail-opens', async () => {
@@ -527,12 +526,10 @@ test('writes every kebab-case output', async () => {
       'is-top',
       'position',
       'reason',
-      'remaining-depth',
       'should-run',
       'size',
     ].sort(),
   )
-  assert.equal(out['remaining-depth'], '1')
   assert.equal(out['should-run'], 'true')
   assert.equal(out['is-stacked'], 'true')
   assert.equal(out['is-bottom'], 'true')
@@ -912,7 +909,6 @@ test('mid-stack skip writes remaining depth and a job summary', async () => {
   const out = parseOutputs(env.GITHUB_OUTPUT)
   const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
   assert.equal(result.should_run, false)
-  assert.equal(out['remaining-depth'], '2')
   assert.equal(out['should-run'], 'false')
   assert.match(out.reason, /remaining depth 2 of size 3/)
   assert.match(summary, /^# Stack CI Gate\n/)
@@ -973,7 +969,6 @@ test('remaining bottom summary names this pull request and keeps position', asyn
   const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
   assert.equal(result.should_run, true)
   assert.equal(result.is_bottom, true)
-  assert.equal(out['remaining-depth'], '1')
   assert.match(out.reason, /lowest unmerged PR/)
   assert.match(summary, /\| Decision \| Run gated jobs \|/)
   assert.match(summary, /\| Remaining depth \| 1 \|/)
@@ -998,7 +993,6 @@ test('top summary says this pull request when run-top is on', async () => {
   )
   const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
   assert.equal(result.should_run, true)
-  assert.equal(out['remaining-depth'], '3')
   assert.match(summary, /\| Decision \| Run gated jobs \|/)
   assert.match(summary, /- Top: \[#13\]\(\/octo\/hello\/pull\/13\) \(this pull request\)/)
   assert.match(summary, /- This pull request: \[#13\]\(\/octo\/hello\/pull\/13\), remaining depth 3/)
@@ -1037,7 +1031,6 @@ test('job summary is skipped when GITHUB_STEP_SUMMARY is unset', async () => {
       }),
   )
   assert.equal(result.should_run, false)
-  assert.equal(out['remaining-depth'], '2')
   assert.deepEqual(fs.readdirSync(dir).sort(), ['event.json', 'output.txt'])
 })
 
@@ -1071,7 +1064,6 @@ test('stacks listing failure with bottom-n=1 still skips a mid-stack pull reques
   const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
   assert.equal(exitCode, 0)
   assert.equal(result.should_run, false)
-  assert.equal(out['remaining-depth'], '')
   assert.match(out.reason, /position 2 of size 3/)
   assert.match(summary, /\| Decision \| Skip gated jobs \|/)
   assert.match(summary, /\| Remaining depth \| unknown \|/)
@@ -1091,7 +1083,6 @@ test('stacks listing failure with bottom-n=2 fail-opens and omits where CI runs'
   )
   const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
   assert.equal(result.should_run, true)
-  assert.equal(out['remaining-depth'], '')
   assert.match(result.reason, /could not determine remaining stack depth/)
   assert.match(summary, /\| Decision \| Run gated jobs \|/)
   assert.match(summary, /\| Remaining depth \| unknown \|/)
@@ -1116,7 +1107,6 @@ test('merge_group summary runs and leaves depth unknown', async () => {
   const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
   assert.equal(fetches, 0)
   assert.equal(result.should_run, true)
-  assert.equal(parseOutputs(env.GITHUB_OUTPUT)['remaining-depth'], '')
   assert.match(summary, /\| Decision \| Run gated jobs \|/)
   assert.match(summary, /\| Remaining depth \| unknown \|/)
   assert.match(summary, /\| Position \| unknown \|/)
@@ -1148,7 +1138,6 @@ test('standalone summary omits where gated CI runs', async () => {
     ['/pulls/42'],
   )
   assert.equal(result.should_run, true)
-  assert.equal(out['remaining-depth'], '')
   assert.match(summary, /\| Stacked \| no \|/)
   assert.match(summary, /\| Remaining depth \| unknown \|/)
   assert.match(summary, /\| Stack source \| api \|/)
@@ -1166,7 +1155,6 @@ test('invalid input summary still runs and does not throw', async () => {
   const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
   assert.equal(exitCode, 0)
   assert.equal(result.should_run, true)
-  assert.equal(parseOutputs(env.GITHUB_OUTPUT)['remaining-depth'], '')
   assert.match(summary, /\| Decision \| Run gated jobs \|/)
   assert.match(summary, /\| Reason \| invalid input; running CI/)
   assert.match(summary, /\| Remaining depth \| unknown \|/)
@@ -1201,7 +1189,6 @@ test('a job summary write failure does not change should-run', async () => {
   assert.equal(exitCode, 0)
   assert.equal(result.should_run, false)
   assert.equal(parseOutputs(env.GITHUB_OUTPUT)['should-run'], 'false')
-  assert.equal(parseOutputs(env.GITHUB_OUTPUT)['remaining-depth'], '2')
   assert.match(warnings.join('\n'), /Could not write the job summary/)
 })
 
@@ -1288,7 +1275,6 @@ test('error summary omits the API response body', async () => {
   )
   const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
   assert.equal(result.should_run, true)
-  assert.equal(out['remaining-depth'], '')
   assert.match(summary, /\| Decision \| Run gated jobs \|/)
   assert.match(summary, /\| Stack source \| error \|/)
   assert.doesNotMatch(summary, /pwned/)

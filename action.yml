@@ -42,8 +42,6 @@ outputs:
     description: Stack position, or empty
   size:
     description: Stack size, or empty
-  remaining-depth:
-    description: Remaining unmerged index from the bottom, or empty when unknown
 
 runs:
   using: node24

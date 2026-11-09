@@ -6,7 +6,6 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 
 ### Added
 
-- Remaining depth is resolved for every stacked pull request. The `remaining-depth` output is that index, or empty when it is unknown.
 - The gate step writes a job summary with the decision and, when known, the remaining depth and the pull requests where gated CI runs.
 
 ## 1.1.0 - 2026-10-01

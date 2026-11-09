@@ -150,7 +150,6 @@ function writeOutputs(outputPath, result, log, trace = {}) {
   appendOutput(outputPath, 'is-top', stringifyBool(result.is_top))
   appendOutput(outputPath, 'position', result.position ?? '')
   appendOutput(outputPath, 'size', result.size ?? '')
-  appendOutput(outputPath, 'remaining-depth', remainingDepth)
   log.log(reason)
   log.log(
     `gate-trace event=${trace.eventName ?? ''} action=${trace.eventAction ?? ''} source=${trace.source ?? ''} event_stack=${trace.eventStack ? 'yes' : 'no'} remaining_depth=${remainingDepth}`,
