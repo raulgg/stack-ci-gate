@@ -9,15 +9,16 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 - The gate step writes a job summary with the decision, the reason, and the stack position.
 - When CI runs only because the gate could not decide, the gate step adds a warning annotation and an `Action needed` job summary section with the cause and the fix.
 - An empty `github-token` warns only on a stacked pull request that needs the stack listing, so fork and Dependabot pull requests stay quiet.
-- `stack-wait-seconds` (default `40`) sets how long `opened` and `reopened` wait for `gh stack submit` to link the stack when the base is not the default branch. Mid-stack PRs from a large submit now skip instead of running.
+- `stack-wait-seconds` (default `40`) sets how long `opened` and `reopened` wait for `gh stack submit` to link the stack when the base is not the default branch; the default covers a submit of about 10 PRs.
+- The job summary adds a `Waited for stack` row when the gate waited for the stack.
 
 ### Changed
 
 - A failed output write adds a `Stack CI Gate` error annotation that says `should-run` is empty, and the gate step still fails.
 - An invalid input still runs CI, and its error annotation is now titled `Stack CI Gate`. The job summary adds an `Action needed` section.
 - With `bottom-n` above 1, the force-run label is checked before an unknown remaining depth, so a labeled mid-stack pull request reports `force-run label …` and does not warn when the stack lookup fails.
-- On `opened` and `reopened`, a PR into the default branch no longer waits for a stack, because it runs either way.
-- The `gate-trace` log line adds `changes` (the names of changed fields on `edited`) and `waited_ms`.
+- With `bottom-n` of 1 or more, a PR into the default branch no longer waits for a stack on `opened` and `reopened`, because it runs either way.
+- On `opened` and `reopened`, a PR into a non-default base that is not in a stack now waits up to `stack-wait-seconds` (default 40 s) instead of about 6 s; set `stack-wait-seconds: 6` to restore the 1.1.0 behaviour.
 
 ### Fixed
 
