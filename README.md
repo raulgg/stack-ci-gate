@@ -135,7 +135,7 @@ All outputs are strings. Compare them with `== 'true'` or `== 'false'`. Gate job
 
 Remaining bottom is the PR whose base is the stack base. After a partial merge, remaining bottom is not `position == 1`. A 1-PR stack is both bottom and top.
 
-When CI runs only because the gate could not decide, such as a missing `pull-requests: read`, the step adds a warning annotation and an `Action needed` section to the job summary with the cause and the fix. With `bottom-n` above 1, a failed stack lookup on the remaining bottom or the top does not change the decision, so it appears only in the log and the summary.
+When CI runs only because the gate could not decide, such as a missing `pull-requests: read`, the step adds a warning annotation and an `Action needed` section to the job summary with the cause and the fix. With `bottom-n` above 1, a failed stack lookup on the remaining bottom or the top does not change the decision, so it appears only in the log and the summary. An empty `github-token` warns only on a stacked pull request that needs the stack listing (`bottom-n` above 1). Pull requests from forks and Dependabot get no secrets, so set `github-token: ${{ secrets.NAME || github.token }}` when you pass a secret.
 
 The label stays until someone removes it, and it can only turn a skip into a run.
 

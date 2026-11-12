@@ -1256,25 +1256,34 @@ test('a failed stack lookup on a force-run labeled mid-stack PR only logs', asyn
   assert.doesNotMatch(summary, /Action needed/)
 })
 
-test('no token and no event stack warns instead of reporting a standalone PR', async () => {
-  const { out, warnings, summary } = await runCaptured(
-    tempDir(),
-    unstackedEvent,
-    { 'INPUT_GITHUB-TOKEN': '' },
-    async () => {
-      throw new Error('no fetch')
-    },
-  )
-  assert.equal(out['should-run'], 'true')
-  assert.doesNotMatch(out.reason, /not in a stack/)
-  assert.match(out.reason, /no token/)
-  assert.match(warnings[0], ANNOTATION)
-  assert.match(warnings[0], /github-token/)
-  assert.match(summary, /## Action needed/)
-})
+for (const action of ['synchronize', 'opened']) {
+  test(`no token on a PR not known to be stacked stays quiet on ${action}`, async () => {
+    let fetches = 0
+    const { exitCode, out, warnings, errors, logs, summary } = await runCaptured(
+      tempDir(),
+      { ...unstackedEvent, action },
+      { 'INPUT_GITHUB-TOKEN': '' },
+      async () => {
+        fetches += 1
+        throw new Error('no fetch')
+      },
+    )
+    assert.equal(exitCode, 0)
+    assert.equal(fetches, 0)
+    assert.equal(out['should-run'], 'true')
+    assert.doesNotMatch(out.reason, /not in a stack/)
+    assert.match(out.reason, /no token/)
+    assert.deepEqual(warnings, [])
+    assert.deepEqual(errors, [])
+    assert.match(logs.join('\n'), /github-token is empty, so the gate did not look for a stack/)
+    assert.match(summary, /\| Stack lookup \| no token to read the stack \|/)
+    assert.match(summary, /\| Stacked \| unknown \|/)
+    assert.doesNotMatch(summary, /Action needed/)
+  })
+}
 
-test('no token with bottom-n=2 names the token as the cause', async () => {
-  const { out, warnings } = await runCaptured(
+test('no token on a stacked PR that needs the stack listing warns with the fork hint', async () => {
+  const { out, warnings, summary } = await runCaptured(
     tempDir(),
     midStackEvent(),
     { 'INPUT_BOTTOM-N': '2', 'INPUT_GITHUB-TOKEN': '' },
@@ -1284,10 +1293,14 @@ test('no token with bottom-n=2 names the token as the cause', async () => {
   )
   assert.equal(out['should-run'], 'true')
   assert.match(out.reason, /could not determine remaining stack depth.*no token/)
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], ANNOTATION)
   assert.match(
     warnings[0],
-    /github-token is empty\. Use the default token, or note that pull requests from forks do not get secrets\.$/,
+    /github-token is empty\. Pull requests from forks and Dependabot get no secrets, so set github-token to \$\{\{ secrets\.NAME \|\| github\.token \}\} to fall back to the default token\.$/,
   )
+  assert.match(summary, /## Action needed/)
+  assert.match(summary, /forks and Dependabot/)
 })
 
 test('a non-numeric pr-number warns and names the input', async () => {

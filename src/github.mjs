@@ -194,7 +194,12 @@ function pullLookupProblem(pull, token, bottomN) {
   if (pull.source === 'invalid-pr-number') {
     return { kind: 'invalid-pr-number', message: 'pr-number is not a pull request number' }
   }
-  if (!token && (pull.source === 'no-token' || (bottomN > 1 && pull.stack != null))) {
+  // Fork and Dependabot pull requests get no secrets. Unless the PR is known
+  // to be stacked and needed the stack listing, an empty token stays quiet.
+  if (pull.source === 'no-token') {
+    return { kind: 'no-token', quiet: true, message: 'no token to read the stack' }
+  }
+  if (!token && bottomN > 1 && pull.stack != null) {
     return { kind: 'no-token', message: 'no token to read the stack' }
   }
   return null

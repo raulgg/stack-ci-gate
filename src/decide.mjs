@@ -105,7 +105,8 @@ function diagnostics(stack, prBaseRef) {
  * among unmerged PRs, counting from the current lowest. Pass null when unknown.
  * The force-run label is checked only after the layers that already run.
  * lookupProblem says why stack data is missing. degraded marks a result that
- * runs CI only because the gate could not decide.
+ * runs CI only because the gate could not decide; lookupQuiet keeps a missing
+ * stack from being degraded when nothing points to a stack.
  */
 export function decide({
   eventName,
@@ -117,6 +118,7 @@ export function decide({
   labelNames = [],
   forceRunLabel = '',
   lookupProblem = '',
+  lookupQuiet = false,
 }) {
   if (!PR_EVENTS.has(eventName)) {
     return failOpen(`not a pull_request event (${eventName}); running CI`)
@@ -125,7 +127,7 @@ export function decide({
   if (stack == null) {
     if (lookupProblem) {
       return failOpen(`could not read the stack; running CI (${lookupProblem})`, {
-        degraded: true,
+        degraded: !lookupQuiet,
       })
     }
     return failOpen('not in a stack; running CI')

@@ -426,6 +426,19 @@ test('a lookup problem with no stack is degraded and not reported as standalone'
   assert.equal(result.reason, 'could not read the stack; running CI (no token)')
 })
 
+test('a quiet lookup problem with no stack names the cause and is not degraded', () => {
+  const result = decide({
+    ...defaults,
+    stack: null,
+    prBaseRef: 'main',
+    lookupProblem: 'no token',
+    lookupQuiet: true,
+  })
+  assert.equal(result.should_run, true)
+  assert.equal(result.degraded, false)
+  assert.equal(result.reason, 'could not read the stack; running CI (no token)')
+})
+
 test('no stack without a lookup problem is a healthy standalone pull request', () => {
   const result = decide({ ...defaults, stack: null, prBaseRef: 'main' })
   assert.equal(result.reason, 'not in a stack; running CI')

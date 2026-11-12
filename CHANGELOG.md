@@ -8,6 +8,7 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 
 - The gate step writes a job summary with the decision, the reason, and the stack position.
 - When CI runs only because the gate could not decide, the gate step adds a warning annotation and an `Action needed` job summary section with the cause and the fix.
+- An empty `github-token` warns only on a stacked pull request that needs the stack listing, so fork and Dependabot pull requests stay quiet.
 
 ### Changed
 

@@ -429,6 +429,7 @@ test('resolveContext reports a missing token with no event stack', async () => {
   })
   assert.equal(resolved.source, 'no-token')
   assert.equal(resolved.lookupProblem.kind, 'no-token')
+  assert.equal(resolved.lookupProblem.quiet, true)
 })
 
 test('resolveContext reports a non-numeric pr-number without fetching', async () => {
@@ -509,6 +510,7 @@ test('resolveContext does not fetch the stack listing without a token', async ()
   assert.equal(resolved.remainingDepth, null)
   assert.equal(resolved.source, 'event')
   assert.equal(resolved.lookupProblem.kind, 'no-token')
+  assert.equal(resolved.lookupProblem.quiet, undefined)
 })
 
 test('resolveContext skips the stack listing when bottom-n is 1', async () => {

@@ -49,7 +49,7 @@ function degradedHint(problem) {
     return 'GitHub sent stack data this action could not use. Update to the latest release.'
   }
   if (problem.kind === 'no-token') {
-    return 'github-token is empty. Use the default token, or note that pull requests from forks do not get secrets.'
+    return 'github-token is empty. Pull requests from forks and Dependabot get no secrets, so set github-token to ${{ secrets.NAME || github.token }} to fall back to the default token.'
   }
   if (problem.kind === 'invalid-pr-number') {
     return 'Set pr-number to a pull request number, or leave it unset.'
@@ -87,6 +87,8 @@ function reportProblem(log, result, trace) {
         `Could not gate stacked CI; running checks by default. (${cause?.message ?? result.reason}) ${actionHint(result, trace)}`,
       ),
     )
+  } else if (problem?.quiet) {
+    log.log('github-token is empty, so the gate did not look for a stack; running CI.')
   } else if (problem) {
     log.log(
       `Stack lookup failed; the decision did not need it. (${safeText(problem.message)}) ${degradedHint(problem)}`,
@@ -272,6 +274,7 @@ export async function run(env = process.env, deps = {}) {
       labelNames,
       forceRunLabel,
       lookupProblem: resolved.lookupProblem ? safeText(resolved.lookupProblem.message) : '',
+      lookupQuiet: resolved.lookupProblem?.quiet === true,
     })
     write(result, {
       eventName,
