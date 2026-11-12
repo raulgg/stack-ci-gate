@@ -32,17 +32,29 @@ export function labelNamesFrom(labels) {
   return names
 }
 
+/** Tag an error with where it came from, so the gate can pick a hint. */
+function tagError(err, fields) {
+  const tagged = err instanceof Error ? err : new Error(String(err))
+  return Object.assign(tagged, fields)
+}
+
 async function githubGet(url, { token, fetchImpl, timeoutMs = FETCH_TIMEOUT_MS }) {
-  const res = await fetchImpl(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': GITHUB_API_VERSION,
-      'User-Agent': 'stack-ci-gate',
-    },
-    redirect: 'error',
-    signal: AbortSignal.timeout(timeoutMs),
-  })
+  let res
+  try {
+    res = await fetchImpl(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': GITHUB_API_VERSION,
+        'User-Agent': 'stack-ci-gate',
+      },
+      redirect: 'error',
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+  } catch (err) {
+    // A rejected fetch is a network error or the timeout, not an HTTP status.
+    throw tagError(err, { network: true })
+  }
   if (!res.ok) {
     const err = new Error(`GET ${url} → ${res.status}`)
     err.status = res.status
@@ -161,14 +173,18 @@ export async function resolvePull({
   let lastPr = null
   for (let i = 0; i < delays.length; i++) {
     if (delays[i] > 0) await sleep(delays[i])
-    lastPr = await fetchPullRequest({
-      apiUrl,
-      repo,
-      prNumber,
-      token,
-      fetchImpl,
-      timeoutMs,
-    })
+    try {
+      lastPr = await fetchPullRequest({
+        apiUrl,
+        repo,
+        prNumber,
+        token,
+        fetchImpl,
+        timeoutMs,
+      })
+    } catch (err) {
+      throw tagError(err, { lookup: 'pull' })
+    }
     const stack = normalizeStack(lastPr.stack)
     if (stack) {
       return {
@@ -254,15 +270,22 @@ export async function resolveContext({
         fetchImpl,
         timeoutMs,
       })
-      remainingDepth = remainingDepthFromStackPulls(
-        stackPayload?.pull_requests,
-        pull.prNumber,
-      )
+      const pulls = stackPayload?.pull_requests
+      remainingDepth = remainingDepthFromStackPulls(pulls, pull.prNumber)
+      if (remainingDepth == null && Array.isArray(pulls)) {
+        lookupProblem = {
+          kind: 'not-in-stack',
+          lookup: 'stack',
+          message: 'this pull request is not open in the stack listing',
+        }
+      }
     } catch (err) {
       remainingDepth = null
       lookupProblem = {
+        lookup: 'stack',
         message: err instanceof Error ? err.message : String(err),
         status: err?.status,
+        network: err?.network === true,
       }
     }
   }

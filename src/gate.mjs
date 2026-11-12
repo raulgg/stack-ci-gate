@@ -44,6 +44,11 @@ function annotation(level, text) {
   return `::${level} title=Stack CI Gate::${safeText(text).replaceAll('%', '%25')}`
 }
 
+/** Rate limits, server errors, timeouts and network errors pass on their own. */
+function isTransient(problem) {
+  return problem.status === 429 || problem.status >= 500 || problem.network === true
+}
+
 function degradedHint(problem) {
   if (problem == null) {
     return 'GitHub sent stack data this action could not use. Update to the latest release.'
@@ -54,16 +59,23 @@ function degradedHint(problem) {
   if (problem.kind === 'invalid-pr-number') {
     return 'Set pr-number to a pull request number, or leave it unset.'
   }
+  if (problem.kind === 'not-in-stack') {
+    return 'The pull request is not open in its stack, for example after a merge, a close or an unstack. If it is still open in a stack, re-run.'
+  }
   if (problem.status === 401) return 'Check the github-token input.'
   if (problem.status === 403) {
     return 'Add pull-requests: read to the gate job. If it is already there, the token may have hit a rate limit.'
   }
   if (problem.status === 404) {
-    return problem.prNumberOverride
+    if (problem.lookup === 'stack') {
+      return 'The stack may have changed; re-run. If it repeats, add pull-requests: read to the gate job.'
+    }
+    return problem.prNumberOverride && problem.lookup === 'pull'
       ? 'Check pr-number, or add pull-requests: read to the gate job.'
       : 'Add pull-requests: read to the gate job.'
   }
-  return 'This is usually temporary.'
+  if (isTransient(problem)) return 'This is usually temporary.'
+  return 'Re-run the job. If it repeats, open an issue on raulgg/stack-ci-gate.'
 }
 
 /** The lookup problem behind a degraded result. Bad stack data is its own cause. */
@@ -96,7 +108,13 @@ function reportProblem(log, result, trace) {
   }
 }
 
-const UNKNOWN_STACK_SOURCES = new Set(['error', 'no-token', 'invalid-input', 'none'])
+const UNKNOWN_STACK_SOURCES = new Set([
+  'error',
+  'no-token',
+  'invalid-input',
+  'invalid-pr-number',
+  'none',
+])
 
 function stackFlag(value, source) {
   if (UNKNOWN_STACK_SOURCES.has(source)) return 'unknown'
@@ -132,7 +150,10 @@ function summaryMarkdown({ result, trace }) {
     ['Event', summaryCell(eventLabel(trace))],
     ['Stack source', summaryCell(trace.source || 'unknown')],
   ]
-  if (trace.problem) rows.push(['Stack lookup', summaryCell(trace.problem.message)])
+  if (trace.problem) {
+    const field = trace.problem.lookup ? 'Stack lookup' : 'Error'
+    rows.push([field, summaryCell(trace.problem.message)])
+  }
   let markdown = '# Stack CI Gate\n\n| Field | Value |\n| --- | --- |\n'
   for (const [field, value] of rows) {
     markdown += `| ${field} | ${value} |\n`
@@ -226,7 +247,7 @@ export async function run(env = process.env, deps = {}) {
   let event = {}
   const prNumberRaw = inputValue(env, 'pr-number')
   const hasPrNumberOverride = String(prNumberRaw ?? '').trim() !== ''
-  // The hint for a 404 depends on whether pr-number chose the pull request.
+  // The hint for a 404 on the pull lookup depends on whether pr-number chose it.
   const withOverride = (problem) =>
     problem && hasPrNumberOverride ? { ...problem, prNumberOverride: true } : problem
 
@@ -291,7 +312,12 @@ export async function run(env = process.env, deps = {}) {
       eventName,
       eventAction: event?.action,
       source: 'error',
-      problem: withOverride({ message, status: err?.status }),
+      problem: withOverride({
+        message,
+        status: err?.status,
+        lookup: err?.lookup,
+        network: err?.network === true,
+      }),
     })
     return { exitCode, result }
   }

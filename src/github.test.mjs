@@ -380,6 +380,8 @@ test('resolveContext leaves remaining depth unknown when the stacks GET fails', 
   assert.equal(resolved.remainingDepth, null)
   assert.equal(resolved.stack.position, 2)
   assert.equal(resolved.lookupProblem.status, 404)
+  assert.equal(resolved.lookupProblem.lookup, 'stack')
+  assert.equal(resolved.lookupProblem.network, false)
   assert.match(resolved.lookupProblem.message, /stacks\/50 → 404/)
   assert.doesNotMatch(resolved.lookupProblem.message, /boom/)
 })
@@ -399,6 +401,7 @@ test('resolveContext reports a thrown stack lookup without a status', async () =
     fetchImpl,
   })
   assert.equal(resolved.lookupProblem.status, undefined)
+  assert.equal(resolved.lookupProblem.network, true)
   assert.match(resolved.lookupProblem.message, /timed out/)
 })
 
@@ -430,6 +433,49 @@ test('resolveContext reports a missing token with no event stack', async () => {
   assert.equal(resolved.source, 'no-token')
   assert.equal(resolved.lookupProblem.kind, 'no-token')
   assert.equal(resolved.lookupProblem.quiet, true)
+})
+
+test('resolveContext reports a PR missing from the stack listing as its own cause', async () => {
+  const resolved = await resolveContext({
+    eventAction: 'synchronize',
+    eventStack: middleStack,
+    eventPrNumber: 42,
+    eventPrBaseRef: 'feat/auth',
+    repo: 'octo/hello',
+    bottomN: 2,
+    token: 't',
+    fetchImpl: async () =>
+      jsonResponse({ pull_requests: [{ number: 42, state: 'closed' }, { number: 43, state: 'open' }] }),
+  })
+  assert.equal(resolved.remainingDepth, null)
+  assert.equal(resolved.lookupProblem.kind, 'not-in-stack')
+})
+
+test('a failed pull lookup is tagged as the pull lookup', async () => {
+  await assert.rejects(
+    resolvePull({
+      eventAction: 'synchronize',
+      eventStack: null,
+      eventPrNumber: 42,
+      repo: 'octo/hello',
+      token: 't',
+      fetchImpl: async () => jsonResponse({}, 502),
+    }),
+    (err) => err.status === 502 && err.lookup === 'pull' && err.network === undefined,
+  )
+  await assert.rejects(
+    resolvePull({
+      eventAction: 'synchronize',
+      eventStack: null,
+      eventPrNumber: 42,
+      repo: 'octo/hello',
+      token: 't',
+      fetchImpl: async () => {
+        throw new TypeError('fetch failed')
+      },
+    }),
+    (err) => err.lookup === 'pull' && err.network === true,
+  )
 })
 
 test('resolveContext reports a non-numeric pr-number without fetching', async () => {
