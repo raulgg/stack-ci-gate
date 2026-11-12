@@ -845,13 +845,13 @@ test('mid-stack skip writes a job summary from the event, without an API call', 
   assert.match(summary, /\| Decision \| Skip gated jobs \|/)
   assert.match(summary, /\| Reason \| middle of stack \(position 2 of size 3\); skipping CI on this layer \|/)
   assert.match(summary, /\| Stacked \| yes \|/)
-  assert.match(summary, /\| Remaining bottom \| no \|/)
+  assert.match(summary, /\| Bottom \| no \|/)
   assert.match(summary, /\| Top \| no \|/)
   assert.match(summary, /\| Position \| 2 \|/)
   assert.match(summary, /\| Size \| 3 \|/)
   assert.match(summary, /\| Event \| pull_request synchronize \|/)
   assert.match(summary, /\| Stack source \| event \|/)
-  const fields = ['Decision', 'Reason', 'Stacked', 'Remaining bottom', 'Top', 'Position', 'Size', 'Event', 'Stack source']
+  const fields = ['Decision', 'Reason', 'Stacked', 'Bottom', 'Top', 'Position', 'Size', 'Event', 'Stack source']
   const indexes = fields.map((name) => summary.indexOf(`| ${name} |`))
   assert.ok(indexes.every((index) => index >= 0))
   for (let i = 1; i < indexes.length; i++) assert.ok(indexes[i] > indexes[i - 1])
@@ -869,7 +869,7 @@ test('remaining bottom summary says run gated jobs', async () => {
   const summary = readSummary(env)
   assert.equal(result.should_run, true)
   assert.match(summary, /\| Decision \| Run gated jobs \|/)
-  assert.match(summary, /\| Remaining bottom \| yes \|/)
+  assert.match(summary, /\| Bottom \| yes \|/)
   assert.match(summary, /\| Position \| 2 \|/)
 })
 
@@ -1042,7 +1042,7 @@ test('fail-open summaries show unknown stack flags', async () => {
     assert.equal(result.should_run, true, item.name)
     assert.match(summary, new RegExp(`\\| Stack source \\| ${item.name} \\|`))
     assert.match(summary, /\| Stacked \| unknown \|/, item.name)
-    assert.match(summary, /\| Remaining bottom \| unknown \|/, item.name)
+    assert.match(summary, /\| Bottom \| unknown \|/, item.name)
     assert.match(summary, /\| Top \| unknown \|/, item.name)
   }
 })

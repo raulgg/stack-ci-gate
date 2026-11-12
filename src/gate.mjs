@@ -72,7 +72,7 @@ function summaryMarkdown({ result, trace }) {
     ['Decision', result.should_run ? 'Run gated jobs' : 'Skip gated jobs'],
     ['Reason', summaryCell(result.reason)],
     ['Stacked', stackFlag(result.is_stacked, trace.source)],
-    ['Remaining bottom', stackFlag(result.is_bottom, trace.source)],
+    ['Bottom', stackFlag(result.is_bottom, trace.source)],
     ['Top', stackFlag(result.is_top, trace.source)],
     ['Position', knownOrUnknown(result.position)],
     ['Size', knownOrUnknown(result.size)],
