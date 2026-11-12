@@ -31,7 +31,6 @@ export function parseRunTop(raw) {
   throw new ConfigError(`run-top must be true or false, got ${JSON.stringify(raw)}`)
 }
 
-/** Seconds `opened` waits for the stack when the base is not the default branch. */
 export function parseStackWaitSeconds(raw) {
   const s = String(raw ?? '').trim()
   if (s === '') return DEFAULT_STACK_WAIT_SECONDS

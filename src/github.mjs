@@ -5,7 +5,6 @@ const DEFAULT_API = 'https://api.github.com'
 export const GITHUB_API_VERSION = '2026-03-10'
 export const FETCH_TIMEOUT_MS = 15_000
 
-/** Default wait when the base is not the default branch. `gh stack submit` links the stack after it opens every PR. */
 export const DEFAULT_STACK_WAIT_MS = DEFAULT_STACK_WAIT_SECONDS * 1000
 
 /** A budget up to this long (the ~6 s retry of 1.1.0) stays quiet when it runs out. */
@@ -118,7 +117,6 @@ function shouldRetryForStack(eventAction) {
 /** A pull request number: digits only, no sign, no leading zero. */
 const PR_NUMBER_PATTERN = /^[1-9]\d*$/
 
-/** 429, 5xx, timeouts and network errors can pass while the wait goes on. */
 function isRetryable(err) {
   return err?.network === true || err?.status === 429 || err?.status >= 500
 }

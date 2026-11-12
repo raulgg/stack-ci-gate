@@ -1697,7 +1697,6 @@ function openedEvent(dir, { baseRef, defaultBranch = 'main', extra = {} }) {
 
 const WAIT_LINE = /Waited .* for a stack and found none/
 
-/** A fake clock: sleep advances now. */
 function gateClock() {
   const state = { t: 1_000_000, sleeps: [] }
   state.now = () => state.t
