@@ -949,26 +949,59 @@ test('a job summary write failure does not change should-run', async () => {
   assert.match(warnings.join('\n'), /Could not write the job summary/)
 })
 
-test('an output write failure does not change should-run', async () => {
-  const dir = tempDir()
+function capture() {
+  const lines = { log: [], warn: [], error: [] }
+  const log = {
+    log(msg) { lines.log.push(String(msg)) },
+    warn(msg) { lines.warn.push(String(msg)) },
+    error(msg) { lines.error.push(String(msg)) },
+  }
+  return { lines, log }
+}
+
+function outputDirEnv(dir, extra = {}) {
   const outputDir = path.join(dir, 'output-dir')
   fs.mkdirSync(outputDir)
-  const warnings = []
+  return baseEnv(dir, { GITHUB_OUTPUT: outputDir, ...summaryEnv(dir), ...extra })
+}
+
+const OUTPUT_ERROR =
+  /^::error title=Stack CI Gate::Could not write gate outputs, so should-run is empty and this step failed\. Jobs that need the gate job are skipped unless their if: uses !cancelled\(\) or always\(\)\. \(/
+
+test('an output write failure on a skip exits 1 with an error annotation', async () => {
+  const dir = tempDir()
   const event = writeEvent(dir, midStackEvent({ number: 12 }))
-  const env = baseEnv(dir, {
-    GITHUB_EVENT_NAME: 'pull_request',
-    GITHUB_EVENT_PATH: event,
-    GITHUB_OUTPUT: outputDir,
-    ...summaryEnv(dir),
-  })
-  const { exitCode, result } = await run(env, {
-    log: { log() {}, error() {}, warn(msg) { warnings.push(String(msg)) } },
-    fetch: noFetch().fetch,
-  })
-  assert.equal(exitCode, 0)
+  const env = outputDirEnv(dir, { GITHUB_EVENT_NAME: 'pull_request', GITHUB_EVENT_PATH: event })
+  const { lines, log } = capture()
+  const { exitCode, result } = await run(env, { log, fetch: noFetch().fetch })
+  assert.equal(exitCode, 1)
   assert.equal(result.should_run, false)
+  assert.equal(lines.error.length, 1)
+  assert.match(lines.error[0], OUTPUT_ERROR)
   assert.match(readSummary(env), /\| Decision \| Skip gated jobs \|/)
-  assert.match(warnings.join('\n'), /Could not write gate outputs/)
+})
+
+test('an output write failure on a run exits 1 with an error annotation', async () => {
+  const dir = tempDir()
+  const env = outputDirEnv(dir, { GITHUB_EVENT_NAME: 'merge_group' })
+  const { lines, log } = capture()
+  const { exitCode, result } = await run(env, { log, fetch: noFetch().fetch })
+  assert.equal(exitCode, 1)
+  assert.equal(result.should_run, true)
+  assert.equal(lines.error.length, 1)
+  assert.match(lines.error[0], OUTPUT_ERROR)
+  assert.match(readSummary(env), /\| Decision \| Run gated jobs \|/)
+})
+
+test('an output write failure on invalid input exits 1', async () => {
+  const dir = tempDir()
+  const env = outputDirEnv(dir, { 'INPUT_BOTTOM-N': 'nope', GITHUB_EVENT_NAME: 'pull_request' })
+  const { lines, log } = capture()
+  const { exitCode, result } = await run(env, { log })
+  assert.equal(exitCode, 1)
+  assert.equal(result.should_run, true)
+  assert.ok(lines.error.some((msg) => OUTPUT_ERROR.test(msg)))
+  assert.match(readSummary(env), /\| Stack source \| invalid-input \|/)
 })
 
 test('summary text neutralizes workflow commands', async () => {
