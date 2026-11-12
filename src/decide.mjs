@@ -9,6 +9,9 @@ export const PR_EVENTS = new Set(['pull_request', 'pull_request_target'])
 
 export const INVALID_STACK_REASON = 'invalid stack metadata; running CI'
 
+/** How long opened/reopened waits for the stack by default. action.yml repeats it. */
+export const DEFAULT_STACK_WAIT_SECONDS = 40
+
 export function parseBottomN(raw) {
   const s = String(raw ?? '1').trim()
   if (s === '') return 1
@@ -30,8 +33,8 @@ export function parseRunTop(raw) {
 
 /** Seconds `opened` waits for the stack when the base is not the default branch. */
 export function parseStackWaitSeconds(raw) {
-  const s = String(raw ?? '40').trim()
-  if (s === '') return 40
+  const s = String(raw ?? '').trim()
+  if (s === '') return DEFAULT_STACK_WAIT_SECONDS
   if (!/^\d+$/.test(s) || Number(s) > 300) {
     throw new ConfigError(
       `stack-wait-seconds must be an integer from 0 to 300, got ${JSON.stringify(raw)}`,

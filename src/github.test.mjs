@@ -639,17 +639,33 @@ function countingPullFetch(stackOnCall, body = {}) {
   return state
 }
 
+/** A fake clock: sleep advances now, and fetches can take time too. */
+function fakeClock() {
+  const state = { t: 1_000_000, sleeps: [] }
+  state.now = () => state.t
+  state.sleep = async (ms) => {
+    state.sleeps.push(ms)
+    state.t += ms
+  }
+  return state
+}
+
+const openedPull = {
+  eventAction: 'opened',
+  eventStack: null,
+  eventPrNumber: 42,
+  eventPrBaseRef: 'feat/auth',
+  prNumberOverride: '',
+  repo: 'octo/hello',
+  token: 't',
+  defaultBranch: 'main',
+}
+
 test('opened into the default branch fetches once and does not sleep', async () => {
   const pulls = countingPullFetch(Infinity, { base: { ref: 'main' } })
   const resolved = await resolvePull({
-    eventAction: 'opened',
-    eventStack: null,
-    eventPrNumber: 42,
+    ...openedPull,
     eventPrBaseRef: 'main',
-    prNumberOverride: '',
-    repo: 'octo/hello',
-    token: 't',
-    defaultBranch: 'main',
     fetchImpl: pulls.fetchImpl,
     sleep: async () => {
       throw new Error('should not sleep')
@@ -661,25 +677,72 @@ test('opened into the default branch fetches once and does not sleep', async () 
   assert.equal(resolved.stackWaitTimedOut, false)
 })
 
-test('opened into another base waits until the stack appears', async () => {
-  const pulls = countingPullFetch(7)
-  const sleeps = []
+test('opened into the default branch still waits with bottom-n 0', async () => {
+  const pulls = countingPullFetch(3, { base: { ref: 'main' } })
+  const clock = fakeClock()
   const resolved = await resolvePull({
-    eventAction: 'opened',
-    eventStack: null,
-    eventPrNumber: 42,
-    eventPrBaseRef: 'feat/auth',
-    prNumberOverride: '',
-    repo: 'octo/hello',
-    token: 't',
-    defaultBranch: 'main',
+    ...openedPull,
+    eventPrBaseRef: 'main',
+    bottomN: 0,
     fetchImpl: pulls.fetchImpl,
-    sleep: async (ms) => {
-      sleeps.push(ms)
+    sleep: clock.sleep,
+    now: clock.now,
+  })
+  assert.equal(pulls.calls, 3)
+  assert.deepEqual(clock.sleeps, [1000, 2000])
+  assert.equal(resolved.stack.position, 2)
+})
+
+test('the default branch comes from the fetched PR when the payload lacks it', async () => {
+  const pulls = countingPullFetch(Infinity, {
+    base: { ref: 'develop', repo: { default_branch: 'develop' } },
+  })
+  const resolved = await resolvePull({
+    ...openedPull,
+    eventPrBaseRef: 'develop',
+    defaultBranch: '',
+    fetchImpl: pulls.fetchImpl,
+    sleep: async () => {
+      throw new Error('should not sleep')
     },
   })
+  assert.equal(pulls.calls, 1)
+  assert.equal(resolved.stackWaitTimedOut, false)
+})
+
+for (const [base, calls] of [
+  ['develop', 1],
+  ['main', 11],
+]) {
+  test(`with default branch develop, opened into ${base} fetches ${calls} time(s)`, async () => {
+    const pulls = countingPullFetch(Infinity, {
+      base: { ref: base, repo: { default_branch: 'develop' } },
+    })
+    const clock = fakeClock()
+    const resolved = await resolvePull({
+      ...openedPull,
+      eventPrBaseRef: base,
+      defaultBranch: 'develop',
+      fetchImpl: pulls.fetchImpl,
+      sleep: clock.sleep,
+      now: clock.now,
+    })
+    assert.equal(pulls.calls, calls)
+    assert.equal(resolved.stackWaitTimedOut, base === 'main')
+  })
+}
+
+test('opened into another base waits until the stack appears', async () => {
+  const pulls = countingPullFetch(7)
+  const clock = fakeClock()
+  const resolved = await resolvePull({
+    ...openedPull,
+    fetchImpl: pulls.fetchImpl,
+    sleep: clock.sleep,
+    now: clock.now,
+  })
   assert.equal(pulls.calls, 7)
-  assert.deepEqual(sleeps, [1000, 2000, 3000, 5000, 5000, 5000])
+  assert.deepEqual(clock.sleeps, [1000, 2000, 3000, 5000, 5000, 5000])
   assert.equal(resolved.stack.position, 2)
   assert.equal(resolved.waitedMs, 21_000)
   assert.equal(resolved.stackWaitTimedOut, undefined)
@@ -687,41 +750,133 @@ test('opened into another base waits until the stack appears', async () => {
 
 test('opened into another base gives up after the full budget', async () => {
   const pulls = countingPullFetch(Infinity)
-  let slept = 0
+  const clock = fakeClock()
   const resolved = await resolvePull({
+    ...openedPull,
     eventAction: 'reopened',
-    eventStack: null,
-    eventPrNumber: 42,
-    eventPrBaseRef: 'feat/auth',
-    prNumberOverride: '',
-    repo: 'octo/hello',
-    token: 't',
-    defaultBranch: 'main',
     fetchImpl: pulls.fetchImpl,
-    sleep: async (ms) => {
-      slept += ms
-    },
+    sleep: clock.sleep,
+    now: clock.now,
   })
   assert.equal(pulls.calls, 11)
-  assert.equal(slept, 40_000)
+  assert.equal(clock.sleeps.reduce((a, b) => a + b, 0), 40_000)
   assert.equal(resolved.stack, null)
   assert.equal(resolved.waitedMs, 40_000)
   assert.equal(resolved.stackWaitTimedOut, true)
 })
 
+test('slow fetches shorten the next sleep so the wait stays within budget', async () => {
+  const clock = fakeClock()
+  let calls = 0
+  const resolved = await resolvePull({
+    ...openedPull,
+    fetchImpl: async () => {
+      calls += 1
+      clock.t += 1500
+      return jsonResponse({ number: 42, base: { ref: 'feat/auth' }, stack: null })
+    },
+    sleep: clock.sleep,
+    now: clock.now,
+  })
+  const start = 1_000_000
+  // Each sleep loses the 1.5 s the previous fetch took; the last fetch starts by the deadline.
+  assert.deepEqual(clock.sleeps.slice(0, 4), [500, 1500, 3500, 3500])
+  assert.equal(calls, 11)
+  assert.equal(resolved.waitedMs, 40_000)
+  // Without the shortening this would be 11 fetches of 1.5 s on top of 40 s of sleep.
+  assert.equal(clock.t - start, 40_000 + 1500)
+  assert.equal(resolved.stackWaitTimedOut, true)
+})
+
+test('a 502 mid-wait keeps polling and the stack still counts', async () => {
+  const clock = fakeClock()
+  let calls = 0
+  const resolved = await resolvePull({
+    ...openedPull,
+    fetchImpl: async () => {
+      calls += 1
+      if (calls === 2) return jsonResponse({ message: 'bad gateway' }, 502)
+      if (calls === 3) throw new Error('The operation was aborted due to timeout')
+      return jsonResponse({
+        number: 42,
+        base: { ref: 'feat/auth' },
+        stack: calls >= 4 ? middleStack : null,
+      })
+    },
+    sleep: clock.sleep,
+    now: clock.now,
+  })
+  assert.equal(calls, 4)
+  assert.equal(resolved.stack.position, 2)
+  assert.equal(resolved.waitedMs, 6000)
+})
+
+for (const status of [401, 403, 404]) {
+  test(`a ${status} mid-wait throws at once with the time waited`, async () => {
+    const clock = fakeClock()
+    let calls = 0
+    await assert.rejects(
+      resolvePull({
+        ...openedPull,
+        fetchImpl: async () => {
+          calls += 1
+          if (calls === 3) return jsonResponse({}, status)
+          return jsonResponse({ number: 42, base: { ref: 'feat/auth' }, stack: null })
+        },
+        sleep: clock.sleep,
+        now: clock.now,
+      }),
+      (err) => err.status === status && err.lookup === 'pull' && err.waitedMs === 3000,
+    )
+    assert.equal(calls, 3)
+  })
+}
+
+test('a 5xx on the last attempt throws with the full wait', async () => {
+  const clock = fakeClock()
+  let calls = 0
+  await assert.rejects(
+    resolvePull({
+      ...openedPull,
+      stackWaitMs: 6000,
+      fetchImpl: async () => {
+        calls += 1
+        return jsonResponse({}, 503)
+      },
+      sleep: clock.sleep,
+      now: clock.now,
+    }),
+    (err) => err.status === 503 && err.waitedMs === 6000,
+  )
+  assert.equal(calls, 4)
+})
+
+test('a 5xx without a wait throws at once', async () => {
+  let calls = 0
+  await assert.rejects(
+    resolvePull({
+      ...openedPull,
+      eventAction: 'synchronize',
+      fetchImpl: async () => {
+        calls += 1
+        return jsonResponse({}, 502)
+      },
+    }),
+    (err) => err.status === 502 && err.waitedMs === 0,
+  )
+  assert.equal(calls, 1)
+})
+
 test('unknown default branch still waits for the stack', async () => {
   const pulls = countingPullFetch(2, { base: { ref: 'main' } })
+  const clock = fakeClock()
   const resolved = await resolvePull({
-    eventAction: 'opened',
-    eventStack: null,
-    eventPrNumber: 42,
+    ...openedPull,
     eventPrBaseRef: 'main',
-    prNumberOverride: '',
-    repo: 'octo/hello',
-    token: 't',
     defaultBranch: '',
     fetchImpl: pulls.fetchImpl,
-    sleep: async () => {},
+    sleep: clock.sleep,
+    now: clock.now,
   })
   assert.equal(pulls.calls, 2)
   assert.equal(resolved.waitedMs, 1000)
@@ -730,14 +885,7 @@ test('unknown default branch still waits for the stack', async () => {
 test('stack wait of 0 fetches once', async () => {
   const pulls = countingPullFetch(Infinity)
   const resolved = await resolvePull({
-    eventAction: 'opened',
-    eventStack: null,
-    eventPrNumber: 42,
-    eventPrBaseRef: 'feat/auth',
-    prNumberOverride: '',
-    repo: 'octo/hello',
-    token: 't',
-    defaultBranch: 'main',
+    ...openedPull,
     stackWaitMs: 0,
     fetchImpl: pulls.fetchImpl,
     sleep: async () => {
@@ -751,37 +899,46 @@ test('stack wait of 0 fetches once', async () => {
 
 test('a 6 s wait that runs out is not a long wait', async () => {
   const pulls = countingPullFetch(Infinity)
+  const clock = fakeClock()
   const resolved = await resolvePull({
-    eventAction: 'opened',
-    eventStack: null,
-    eventPrNumber: 42,
-    eventPrBaseRef: 'feat/auth',
-    prNumberOverride: '',
-    repo: 'octo/hello',
-    token: 't',
-    defaultBranch: 'main',
+    ...openedPull,
     stackWaitMs: 6000,
     fetchImpl: pulls.fetchImpl,
-    sleep: async () => {},
+    sleep: clock.sleep,
+    now: clock.now,
   })
   assert.equal(pulls.calls, 4)
   assert.equal(resolved.waitedMs, 6000)
   assert.equal(resolved.stackWaitTimedOut, false)
 })
 
-test('pr-number override does not take the default-branch shortcut', async () => {
+test('a pr-number override into the default branch stops after the first fetch', async () => {
   const pulls = countingPullFetch(3, { base: { ref: 'main' } })
   const resolved = await resolvePull({
-    eventAction: 'opened',
-    eventStack: null,
+    ...openedPull,
+    eventPrNumber: 7,
+    eventPrBaseRef: 'feat/other',
+    prNumberOverride: '42',
+    fetchImpl: pulls.fetchImpl,
+    sleep: async () => {
+      throw new Error('should not sleep')
+    },
+  })
+  assert.equal(pulls.calls, 1)
+  assert.equal(resolved.stack, null)
+})
+
+test('a pr-number override into another base waits for the stack', async () => {
+  const pulls = countingPullFetch(3)
+  const clock = fakeClock()
+  const resolved = await resolvePull({
+    ...openedPull,
     eventPrNumber: 7,
     eventPrBaseRef: 'main',
     prNumberOverride: '42',
-    repo: 'octo/hello',
-    token: 't',
-    defaultBranch: 'main',
     fetchImpl: pulls.fetchImpl,
-    sleep: async () => {},
+    sleep: clock.sleep,
+    now: clock.now,
   })
   assert.equal(pulls.calls, 3)
   assert.equal(resolved.stack.position, 2)

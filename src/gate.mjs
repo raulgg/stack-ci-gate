@@ -237,7 +237,7 @@ export async function run(env = process.env, deps = {}) {
     }
     reportProblem(log, result, trace)
     // A long wait that found no stack is expected for a standalone PR, so it only logs.
-    if (trace.stackWaitTimedOut && !result.is_stacked) {
+    if (trace.stackWaitTimedOut) {
       log.log(
         `Waited ${formatSeconds(trace.waitedMs)} for a stack and found none, so this runs as a standalone pull request. A pull request from a large gh stack submit can need a higher stack-wait-seconds.`,
       )
@@ -301,8 +301,8 @@ export async function run(env = process.env, deps = {}) {
       apiUrl: env.GITHUB_API_URL || 'https://api.github.com',
       fetchImpl,
       sleep,
+      now: deps.now,
       bottomN,
-      retryDelaysMs: deps.retryDelaysMs,
       defaultBranch: event.repository?.default_branch ?? '',
       stackWaitMs: stackWaitSeconds * 1000,
     })
@@ -341,6 +341,8 @@ export async function run(env = process.env, deps = {}) {
       eventName,
       eventAction: event?.action,
       source: 'error',
+      changes: event?.changes,
+      waitedMs: err?.waitedMs,
       problem: withOverride({
         message,
         status: err?.status,
