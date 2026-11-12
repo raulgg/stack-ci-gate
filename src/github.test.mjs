@@ -82,7 +82,7 @@ test('opened with no event stack uses API stack (middle → caller will skip)', 
 
 test('opened retries until stack appears', async () => {
   let calls = 0
-  const sleeps = []
+  const clock = fakeClock()
   const resolved = await resolvePull({
     eventAction: 'opened',
     eventStack: null,
@@ -91,9 +91,8 @@ test('opened retries until stack appears', async () => {
     repo: 'octo/hello',
     token: 't',
     retryDelaysMs: [0, 10, 20],
-    sleep: async (ms) => {
-      sleeps.push(ms)
-    },
+    sleep: clock.sleep,
+    now: clock.now,
     fetchImpl: async () => {
       calls += 1
       if (calls < 3) {
@@ -111,7 +110,7 @@ test('opened retries until stack appears', async () => {
     },
   })
   assert.equal(calls, 3)
-  assert.deepEqual(sleeps, [10, 20])
+  assert.deepEqual(clock.sleeps, [10, 20])
   assert.equal(resolved.stack.position, 2)
 })
 

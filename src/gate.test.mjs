@@ -1867,16 +1867,15 @@ test('blank stack-wait-seconds uses 40', async () => {
     GITHUB_EVENT_PATH: openedEvent(dir, { baseRef: 'feat/auth' }),
     'INPUT_STACK-WAIT-SECONDS': ' ',
   })
-  let slept = 0
+  const clock = gateClock()
   await run(env, {
     log: silent,
-    sleep: async (ms) => {
-      slept += ms
-    },
+    sleep: clock.sleep,
+    now: clock.now,
     fetch: async () =>
       jsonResponse({ number: 42, base: { ref: 'feat/auth' }, stack: null }),
   })
-  assert.equal(slept, 40_000)
+  assert.equal(clock.sleeps.reduce((a, b) => a + b, 0), 40_000)
 })
 
 test('invalid stack-wait-seconds fail-opens with an error annotation', async () => {
