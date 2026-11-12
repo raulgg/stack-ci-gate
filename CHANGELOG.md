@@ -4,6 +4,14 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 
 ## Unreleased
 
+### Added
+
+- The gate step writes a job summary with the decision, the reason, and the stack position.
+
+### Changed
+
+- A failed output write adds a `Stack CI Gate` error annotation that says `should-run` is empty, and the gate step still fails.
+
 ## 1.1.0 - 2026-10-01
 
 ### Added

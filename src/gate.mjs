@@ -38,6 +38,64 @@ function safeText(text) {
   return oneLine(text).replaceAll('::', ': :').replaceAll('##[', '# [')
 }
 
+/** GitHub reads % codes in annotation text, so escape % to keep text like %0A from turning into a line break. */
+function annotation(level, text) {
+  return `::${level} title=Stack CI Gate::${safeText(text).replaceAll('%', '%25')}`
+}
+
+const UNKNOWN_STACK_SOURCES = new Set(['error', 'no-token', 'invalid-input', 'none'])
+
+function stackFlag(value, source) {
+  if (UNKNOWN_STACK_SOURCES.has(source)) return 'unknown'
+  return value ? 'yes' : 'no'
+}
+
+/** A pipe would end the table cell. */
+function summaryCell(value) {
+  return safeText(value).replaceAll('|', '\\|')
+}
+
+function knownOrUnknown(value) {
+  if (value == null || value === '') return 'unknown'
+  return summaryCell(value)
+}
+
+function eventLabel(trace) {
+  const name = trace.eventName ? safeText(trace.eventName) : ''
+  const action = trace.eventAction ? safeText(trace.eventAction) : ''
+  if (name && action) return `${name} ${action}`
+  return name || action || 'unknown'
+}
+
+function summaryMarkdown({ result, trace }) {
+  const rows = [
+    ['Decision', result.should_run ? 'Run gated jobs' : 'Skip gated jobs'],
+    ['Reason', summaryCell(result.reason)],
+    ['Stacked', stackFlag(result.is_stacked, trace.source)],
+    ['Bottom', stackFlag(result.is_bottom, trace.source)],
+    ['Top', stackFlag(result.is_top, trace.source)],
+    ['Position', knownOrUnknown(result.position)],
+    ['Size', knownOrUnknown(result.size)],
+    ['Event', summaryCell(eventLabel(trace))],
+    ['Stack source', summaryCell(trace.source || 'unknown')],
+  ]
+  let markdown = '# Stack CI Gate\n\n| Field | Value |\n| --- | --- |\n'
+  for (const [field, value] of rows) {
+    markdown += `| ${field} | ${value} |\n`
+  }
+  return markdown
+}
+
+function writeJobSummary(summaryPath, fields, log) {
+  if (!summaryPath) return
+  try {
+    fs.appendFileSync(summaryPath, summaryMarkdown(fields))
+  } catch (err) {
+    const message = safeText(err instanceof Error ? err.message : String(err))
+    log.warn(`Could not write the job summary. (${message})`)
+  }
+}
+
 function applyLabelChange(names, action, label) {
   const current = Array.isArray(names) ? names.slice() : []
   if (typeof label !== 'string') return current
@@ -69,7 +127,23 @@ export async function run(env = process.env, deps = {}) {
   const sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
   const log = deps.log ?? console
   const outputPath = env.GITHUB_OUTPUT
-  const write = (result, trace) => writeOutputs(outputPath, result, log, trace)
+  // A failed output write leaves should-run empty, so the step fails as 1.1.0 did.
+  let exitCode = 0
+  const write = (result, trace = {}) => {
+    try {
+      writeOutputs(outputPath, result, log, trace)
+    } catch (err) {
+      exitCode = 1
+      const message = err instanceof Error ? err.message : String(err)
+      log.error(
+        annotation(
+          'error',
+          `Could not write gate outputs, so should-run is empty and this step failed. Jobs that need the gate job are skipped unless their if: uses !cancelled() or always(). (${message})`,
+        ),
+      )
+    }
+    writeJobSummary(env.GITHUB_STEP_SUMMARY, { result, trace }, log)
+  }
 
   let bottomN
   let runTop
@@ -83,12 +157,13 @@ export async function run(env = process.env, deps = {}) {
       log.error(`::error::${safeText(err.message)}`)
       const result = failOpen(`invalid input; running CI (${safeText(err.message)})`)
       write(result, { eventName: env.GITHUB_EVENT_NAME || '', source: 'invalid-input' })
-      return { exitCode: 0, result, error: err }
+      return { exitCode, result, error: err }
     }
     throw err
   }
 
   const eventName = env.GITHUB_EVENT_NAME || ''
+  let event = {}
 
   try {
     if (!PR_EVENTS.has(eventName)) {
@@ -100,10 +175,10 @@ export async function run(env = process.env, deps = {}) {
         prBaseRef: '',
       })
       write(result, { eventName, source: 'n/a' })
-      return { exitCode: 0, result }
+      return { exitCode, result }
     }
 
-    const event = readEvent(env.GITHUB_EVENT_PATH)
+    event = readEvent(env.GITHUB_EVENT_PATH)
     const pr = event.pull_request ?? {}
     const prNumberRaw = inputValue(env, 'pr-number')
     const resolved = await resolveContext({
@@ -142,13 +217,13 @@ export async function run(env = process.env, deps = {}) {
       source: resolved.source,
       eventStack: pr.stack,
     })
-    return { exitCode: 0, result }
+    return { exitCode, result }
   } catch (err) {
     const message = safeText(err instanceof Error ? err.message : String(err))
     log.warn(`Could not gate stacked CI; running checks by default. (${message})`)
     const result = failOpen(`error; running CI (${message})`)
-    write(result, { eventName, source: 'error' })
-    return { exitCode: 0, result }
+    write(result, { eventName, eventAction: event?.action, source: 'error' })
+    return { exitCode, result }
   }
 }
 

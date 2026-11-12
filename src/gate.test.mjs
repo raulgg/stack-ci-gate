@@ -817,3 +817,286 @@ test('force-run reason neutralizes workflow commands in the label name', async (
   assert.equal(out.reason, 'force-run label bad: :name')
   assert.doesNotMatch(fs.readFileSync(env.GITHUB_OUTPUT, 'utf8'), /::/)
 })
+
+function summaryEnv(dir, extra = {}) {
+  return {
+    GITHUB_STEP_SUMMARY: path.join(dir, 'summary.md'),
+    ...extra,
+  }
+}
+
+function readSummary(env) {
+  return fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
+}
+
+test('mid-stack skip writes a job summary from the event, without an API call', async () => {
+  const dir = tempDir()
+  const { calls, fetch } = noFetch()
+  const { result, env } = await runPull(
+    dir,
+    midStackEvent({ number: 12, position: 2, size: 3 }),
+    summaryEnv(dir),
+    fetch,
+  )
+  const summary = readSummary(env)
+  assert.equal(calls.length, 0)
+  assert.equal(result.should_run, false)
+  assert.match(summary, /^# Stack CI Gate\n/)
+  assert.match(summary, /\| Decision \| Skip gated jobs \|/)
+  assert.match(summary, /\| Reason \| middle of stack \(position 2 of size 3\); skipping CI on this layer \|/)
+  assert.match(summary, /\| Stacked \| yes \|/)
+  assert.match(summary, /\| Bottom \| no \|/)
+  assert.match(summary, /\| Top \| no \|/)
+  assert.match(summary, /\| Position \| 2 \|/)
+  assert.match(summary, /\| Size \| 3 \|/)
+  assert.match(summary, /\| Event \| pull_request synchronize \|/)
+  assert.match(summary, /\| Stack source \| event \|/)
+  const fields = ['Decision', 'Reason', 'Stacked', 'Bottom', 'Top', 'Position', 'Size', 'Event', 'Stack source']
+  const indexes = fields.map((name) => summary.indexOf(`| ${name} |`))
+  assert.ok(indexes.every((index) => index >= 0))
+  for (let i = 1; i < indexes.length; i++) assert.ok(indexes[i] > indexes[i - 1])
+})
+
+test('remaining bottom summary says run gated jobs', async () => {
+  const dir = tempDir()
+  const { fetch } = noFetch()
+  const { result, env } = await runPull(
+    dir,
+    midStackEvent({ number: 10, baseRef: 'main', position: 2, size: 4 }),
+    summaryEnv(dir),
+    fetch,
+  )
+  const summary = readSummary(env)
+  assert.equal(result.should_run, true)
+  assert.match(summary, /\| Decision \| Run gated jobs \|/)
+  assert.match(summary, /\| Bottom \| yes \|/)
+  assert.match(summary, /\| Position \| 2 \|/)
+})
+
+test('job summary is skipped when GITHUB_STEP_SUMMARY is unset', async () => {
+  const dir = tempDir()
+  const { fetch } = noFetch()
+  const { result } = await runPull(dir, midStackEvent({ number: 12 }), {}, fetch)
+  assert.equal(result.should_run, false)
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['event.json', 'output.txt'])
+})
+
+test('merge_group summary runs with no stack data', async () => {
+  const dir = tempDir()
+  const env = baseEnv(dir, { GITHUB_EVENT_NAME: 'merge_group', ...summaryEnv(dir) })
+  const { calls, fetch } = noFetch()
+  const { result } = await run(env, { log: silent, fetch })
+  const summary = readSummary(env)
+  assert.equal(calls.length, 0)
+  assert.equal(result.should_run, true)
+  assert.match(summary, /\| Decision \| Run gated jobs \|/)
+  assert.match(summary, /\| Position \| unknown \|/)
+  assert.match(summary, /\| Size \| unknown \|/)
+  assert.match(summary, /\| Event \| merge_group \|/)
+  assert.match(summary, /\| Stack source \| n\/a \|/)
+})
+
+test('standalone summary says not stacked', async () => {
+  const dir = tempDir()
+  const { result, env } = await runPull(
+    dir,
+    { action: 'synchronize', pull_request: { number: 42, base: { ref: 'main' }, stack: null } },
+    summaryEnv(dir),
+    async (url) => {
+      assert.match(url, /\/pulls\/42$/)
+      return jsonResponse({ number: 42, base: { ref: 'main' }, stack: null })
+    },
+  )
+  const summary = readSummary(env)
+  assert.equal(result.should_run, true)
+  assert.match(summary, /\| Stacked \| no \|/)
+  assert.match(summary, /\| Stack source \| api \|/)
+})
+
+test('invalid input summary still runs and does not throw', async () => {
+  const dir = tempDir()
+  const env = baseEnv(dir, {
+    'INPUT_BOTTOM-N': 'nope',
+    GITHUB_EVENT_NAME: 'pull_request',
+    ...summaryEnv(dir),
+  })
+  const { exitCode, result } = await run(env, { log: silent })
+  const summary = readSummary(env)
+  assert.equal(exitCode, 0)
+  assert.equal(result.should_run, true)
+  assert.match(summary, /\| Decision \| Run gated jobs \|/)
+  assert.match(summary, /\| Reason \| invalid input; running CI/)
+  assert.match(summary, /\| Event \| pull_request \|/)
+  assert.match(summary, /\| Stack source \| invalid-input \|/)
+})
+
+test('a job summary write failure does not change should-run', async () => {
+  const dir = tempDir()
+  const warnings = []
+  const event = writeEvent(dir, midStackEvent({ number: 12 }))
+  const env = baseEnv(dir, {
+    GITHUB_EVENT_NAME: 'pull_request',
+    GITHUB_EVENT_PATH: event,
+    GITHUB_STEP_SUMMARY: path.join(dir, 'missing', 'summary.md'),
+  })
+  const { exitCode, result } = await run(env, {
+    log: { log() {}, error() {}, warn(msg) { warnings.push(String(msg)) } },
+    fetch: noFetch().fetch,
+  })
+  assert.equal(exitCode, 0)
+  assert.equal(result.should_run, false)
+  assert.equal(parseOutputs(env.GITHUB_OUTPUT)['should-run'], 'false')
+  assert.match(warnings.join('\n'), /Could not write the job summary/)
+})
+
+function capture() {
+  const lines = { log: [], warn: [], error: [] }
+  const log = {
+    log(msg) { lines.log.push(String(msg)) },
+    warn(msg) { lines.warn.push(String(msg)) },
+    error(msg) { lines.error.push(String(msg)) },
+  }
+  return { lines, log }
+}
+
+function outputDirEnv(dir, extra = {}) {
+  const outputDir = path.join(dir, 'output-dir')
+  fs.mkdirSync(outputDir)
+  return baseEnv(dir, { GITHUB_OUTPUT: outputDir, ...summaryEnv(dir), ...extra })
+}
+
+const OUTPUT_ERROR =
+  /^::error title=Stack CI Gate::Could not write gate outputs, so should-run is empty and this step failed\. Jobs that need the gate job are skipped unless their if: uses !cancelled\(\) or always\(\)\. \(/
+
+test('an output write failure on a skip exits 1 with an error annotation', async () => {
+  const dir = tempDir()
+  const event = writeEvent(dir, midStackEvent({ number: 12 }))
+  const env = outputDirEnv(dir, { GITHUB_EVENT_NAME: 'pull_request', GITHUB_EVENT_PATH: event })
+  const { lines, log } = capture()
+  const { exitCode, result } = await run(env, { log, fetch: noFetch().fetch })
+  assert.equal(exitCode, 1)
+  assert.equal(result.should_run, false)
+  assert.equal(lines.error.length, 1)
+  assert.match(lines.error[0], OUTPUT_ERROR)
+  assert.match(readSummary(env), /\| Decision \| Skip gated jobs \|/)
+})
+
+test('an output write failure on a run exits 1 with an error annotation', async () => {
+  const dir = tempDir()
+  const env = outputDirEnv(dir, { GITHUB_EVENT_NAME: 'merge_group' })
+  const { lines, log } = capture()
+  const { exitCode, result } = await run(env, { log, fetch: noFetch().fetch })
+  assert.equal(exitCode, 1)
+  assert.equal(result.should_run, true)
+  assert.equal(lines.error.length, 1)
+  assert.match(lines.error[0], OUTPUT_ERROR)
+  assert.match(readSummary(env), /\| Decision \| Run gated jobs \|/)
+})
+
+test('an output write failure on invalid input exits 1', async () => {
+  const dir = tempDir()
+  const env = outputDirEnv(dir, { 'INPUT_BOTTOM-N': 'nope', GITHUB_EVENT_NAME: 'pull_request' })
+  const { lines, log } = capture()
+  const { exitCode, result } = await run(env, { log })
+  assert.equal(exitCode, 1)
+  assert.equal(result.should_run, true)
+  assert.ok(lines.error.some((msg) => OUTPUT_ERROR.test(msg)))
+  assert.match(readSummary(env), /\| Stack source \| invalid-input \|/)
+})
+
+test('the job summary appends to an existing file', async () => {
+  const dir = tempDir()
+  const env = summaryEnv(dir)
+  fs.writeFileSync(env.GITHUB_STEP_SUMMARY, '# Earlier step\n\n')
+  await runPull(dir, midStackEvent({ number: 12 }), env, noFetch().fetch)
+  const summary = readSummary(env)
+  assert.match(summary, /^# Earlier step\n\n# Stack CI Gate\n/)
+  assert.match(summary, /\| Decision \| Skip gated jobs \|/)
+})
+
+test('fail-open summaries show unknown stack flags', async () => {
+  const cases = [
+    {
+      name: 'error',
+      payload: { action: 'synchronize', pull_request: { number: 42, base: { ref: 'feat/auth' }, stack: null } },
+      env: {},
+      fetch: async () => jsonResponse({}, 502),
+    },
+    {
+      name: 'no-token',
+      payload: { action: 'synchronize', pull_request: { number: 42, base: { ref: 'feat/auth' }, stack: null } },
+      env: { 'INPUT_GITHUB-TOKEN': '' },
+      fetch: noFetch().fetch,
+    },
+    {
+      name: 'none',
+      payload: { action: 'synchronize', pull_request: { base: { ref: 'feat/auth' } } },
+      env: {},
+      fetch: noFetch().fetch,
+    },
+  ]
+  for (const item of cases) {
+    const dir = tempDir()
+    const { result, env } = await runPull(dir, item.payload, summaryEnv(dir, item.env), item.fetch)
+    const summary = readSummary(env)
+    assert.equal(result.should_run, true, item.name)
+    assert.match(summary, new RegExp(`\\| Stack source \\| ${item.name} \\|`))
+    assert.match(summary, /\| Stacked \| unknown \|/, item.name)
+    assert.match(summary, /\| Bottom \| unknown \|/, item.name)
+    assert.match(summary, /\| Top \| unknown \|/, item.name)
+  }
+})
+
+test('invalid input summary shows unknown stack flags', async () => {
+  const dir = tempDir()
+  const env = baseEnv(dir, { 'INPUT_BOTTOM-N': 'nope', GITHUB_EVENT_NAME: 'pull_request', ...summaryEnv(dir) })
+  await run(env, { log: silent })
+  assert.match(readSummary(env), /\| Stacked \| unknown \|/)
+})
+
+test('error summary keeps the event action', async () => {
+  const dir = tempDir()
+  const { env } = await runPull(
+    dir,
+    { action: 'opened', pull_request: { number: 42, base: { ref: 'feat/auth' }, stack: null } },
+    summaryEnv(dir),
+    async () => jsonResponse({}, 502),
+  )
+  const summary = readSummary(env)
+  assert.match(summary, /\| Event \| pull_request opened \|/)
+  assert.match(summary, /\| Stack source \| error \|/)
+})
+
+test('summary text neutralizes workflow commands', async () => {
+  const dir = tempDir()
+  const label = 'bad::name##[x|y'
+  const { out, env } = await runPull(
+    dir,
+    midStackEvent({ labels: [{ name: label }] }),
+    summaryEnv(dir, { 'INPUT_FORCE-RUN-LABEL': label }),
+    noFetch().fetch,
+  )
+  const summary = readSummary(env)
+  assert.equal(out.reason, 'force-run label bad: :name# [x|y')
+  assert.match(summary, /force-run label bad: :name# \[x\\\|y/)
+  assert.doesNotMatch(summary, /::/)
+  assert.doesNotMatch(summary, /##\[/)
+})
+
+test('error summary neutralizes workflow commands and pipes in the error', async () => {
+  const dir = tempDir()
+  const { result, env } = await runPull(
+    dir,
+    { action: 'synchronize', pull_request: { number: 42, base: { ref: 'feat/auth' }, stack: null } },
+    summaryEnv(dir),
+    async () => {
+      throw new Error('::error::pwned ##[warning]x | y')
+    },
+  )
+  const summary = readSummary(env)
+  assert.equal(result.should_run, true)
+  assert.match(summary, /\| Stack source \| error \|/)
+  assert.match(summary, /: :error: :pwned # \[warning\]x \\\| y/)
+  assert.doesNotMatch(summary, /::/)
+  assert.doesNotMatch(summary, /##\[/)
+})
