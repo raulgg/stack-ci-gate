@@ -43,7 +43,6 @@ function annotation(level, text) {
   return `::${level} title=Stack CI Gate::${safeText(text).replaceAll('%', '%25')}`
 }
 
-/** Stack sources where the gate could not tell whether the PR is stacked. */
 const UNKNOWN_STACK_SOURCES = new Set(['error', 'no-token', 'invalid-input', 'none'])
 
 function stackFlag(value, source) {
