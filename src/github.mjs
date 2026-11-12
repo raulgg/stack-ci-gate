@@ -32,7 +32,6 @@ export function labelNamesFrom(labels) {
   return names
 }
 
-/** Tag an error with where it came from, so the gate can pick a hint. */
 function tagError(err, fields) {
   const tagged = err instanceof Error ? err : new Error(String(err))
   return Object.assign(tagged, fields)

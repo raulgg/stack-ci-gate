@@ -44,7 +44,6 @@ function annotation(level, text) {
   return `::${level} title=Stack CI Gate::${safeText(text).replaceAll('%', '%25')}`
 }
 
-/** Rate limits, server errors, timeouts and network errors pass on their own. */
 function isTransient(problem) {
   return problem.status === 429 || problem.status >= 500 || problem.network === true
 }
