@@ -43,17 +43,22 @@ function annotation(level, text) {
   return `::${level} title=Stack CI Gate::${safeText(text).replaceAll('%', '%25')}`
 }
 
-function yesNo(value) {
+/** Stack sources where the gate could not tell whether the PR is stacked. */
+const UNKNOWN_STACK_SOURCES = new Set(['error', 'no-token', 'invalid-input', 'none'])
+
+function stackFlag(value, source) {
+  if (UNKNOWN_STACK_SOURCES.has(source)) return 'unknown'
   return value ? 'yes' : 'no'
+}
+
+/** A pipe would end the table cell. */
+function summaryCell(value) {
+  return safeText(value).replaceAll('|', '\\|')
 }
 
 function knownOrUnknown(value) {
   if (value == null || value === '') return 'unknown'
-  return safeText(value)
-}
-
-function summaryCell(value) {
-  return safeText(value).replaceAll('|', '/')
+  return summaryCell(value)
 }
 
 function eventLabel(trace) {
@@ -67,9 +72,9 @@ function summaryMarkdown({ result, trace }) {
   const rows = [
     ['Decision', result.should_run ? 'Run gated jobs' : 'Skip gated jobs'],
     ['Reason', summaryCell(result.reason)],
-    ['Stacked', yesNo(result.is_stacked)],
-    ['Remaining bottom', yesNo(result.is_bottom)],
-    ['Top', yesNo(result.is_top)],
+    ['Stacked', stackFlag(result.is_stacked, trace.source)],
+    ['Remaining bottom', stackFlag(result.is_bottom, trace.source)],
+    ['Top', stackFlag(result.is_top, trace.source)],
     ['Position', knownOrUnknown(result.position)],
     ['Size', knownOrUnknown(result.size)],
     ['Event', summaryCell(eventLabel(trace))],
@@ -79,7 +84,7 @@ function summaryMarkdown({ result, trace }) {
   for (const [field, value] of rows) {
     markdown += `| ${field} | ${value} |\n`
   }
-  return markdown.replaceAll('::', ': :').replaceAll('##[', '# [')
+  return markdown
 }
 
 function writeJobSummary(summaryPath, fields, log) {
@@ -159,6 +164,7 @@ export async function run(env = process.env, deps = {}) {
   }
 
   const eventName = env.GITHUB_EVENT_NAME || ''
+  let event = {}
 
   try {
     if (!PR_EVENTS.has(eventName)) {
@@ -173,7 +179,7 @@ export async function run(env = process.env, deps = {}) {
       return { exitCode, result }
     }
 
-    const event = readEvent(env.GITHUB_EVENT_PATH)
+    event = readEvent(env.GITHUB_EVENT_PATH)
     const pr = event.pull_request ?? {}
     const prNumberRaw = inputValue(env, 'pr-number')
     const resolved = await resolveContext({
@@ -217,7 +223,7 @@ export async function run(env = process.env, deps = {}) {
     const message = safeText(err instanceof Error ? err.message : String(err))
     log.warn(`Could not gate stacked CI; running checks by default. (${message})`)
     const result = failOpen(`error; running CI (${message})`)
-    write(result, { eventName, source: 'error' })
+    write(result, { eventName, eventAction: event?.action, source: 'error' })
     return { exitCode, result }
   }
 }

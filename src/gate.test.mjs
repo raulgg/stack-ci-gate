@@ -1004,6 +1004,69 @@ test('an output write failure on invalid input exits 1', async () => {
   assert.match(readSummary(env), /\| Stack source \| invalid-input \|/)
 })
 
+test('the job summary appends to an existing file', async () => {
+  const dir = tempDir()
+  const env = summaryEnv(dir)
+  fs.writeFileSync(env.GITHUB_STEP_SUMMARY, '# Earlier step\n\n')
+  await runPull(dir, midStackEvent({ number: 12 }), env, noFetch().fetch)
+  const summary = readSummary(env)
+  assert.match(summary, /^# Earlier step\n\n# Stack CI Gate\n/)
+  assert.match(summary, /\| Decision \| Skip gated jobs \|/)
+})
+
+test('fail-open summaries show unknown stack flags', async () => {
+  const cases = [
+    {
+      name: 'error',
+      payload: { action: 'synchronize', pull_request: { number: 42, base: { ref: 'feat/auth' }, stack: null } },
+      env: {},
+      fetch: async () => jsonResponse({}, 502),
+    },
+    {
+      name: 'no-token',
+      payload: { action: 'synchronize', pull_request: { number: 42, base: { ref: 'feat/auth' }, stack: null } },
+      env: { 'INPUT_GITHUB-TOKEN': '' },
+      fetch: noFetch().fetch,
+    },
+    {
+      name: 'none',
+      payload: { action: 'synchronize', pull_request: { base: { ref: 'feat/auth' } } },
+      env: {},
+      fetch: noFetch().fetch,
+    },
+  ]
+  for (const item of cases) {
+    const dir = tempDir()
+    const { result, env } = await runPull(dir, item.payload, summaryEnv(dir, item.env), item.fetch)
+    const summary = readSummary(env)
+    assert.equal(result.should_run, true, item.name)
+    assert.match(summary, new RegExp(`\\| Stack source \\| ${item.name} \\|`))
+    assert.match(summary, /\| Stacked \| unknown \|/, item.name)
+    assert.match(summary, /\| Remaining bottom \| unknown \|/, item.name)
+    assert.match(summary, /\| Top \| unknown \|/, item.name)
+  }
+})
+
+test('invalid input summary shows unknown stack flags', async () => {
+  const dir = tempDir()
+  const env = baseEnv(dir, { 'INPUT_BOTTOM-N': 'nope', GITHUB_EVENT_NAME: 'pull_request', ...summaryEnv(dir) })
+  await run(env, { log: silent })
+  assert.match(readSummary(env), /\| Stacked \| unknown \|/)
+})
+
+test('error summary keeps the event action', async () => {
+  const dir = tempDir()
+  const { env } = await runPull(
+    dir,
+    { action: 'opened', pull_request: { number: 42, base: { ref: 'feat/auth' }, stack: null } },
+    summaryEnv(dir),
+    async () => jsonResponse({}, 502),
+  )
+  const summary = readSummary(env)
+  assert.match(summary, /\| Event \| pull_request opened \|/)
+  assert.match(summary, /\| Stack source \| error \|/)
+})
+
 test('summary text neutralizes workflow commands', async () => {
   const dir = tempDir()
   const label = 'bad::name##[x|y'
@@ -1015,23 +1078,25 @@ test('summary text neutralizes workflow commands', async () => {
   )
   const summary = readSummary(env)
   assert.equal(out.reason, 'force-run label bad: :name# [x|y')
-  assert.match(summary, /force-run label bad: :name# \[x\/y/)
+  assert.match(summary, /force-run label bad: :name# \[x\\\|y/)
   assert.doesNotMatch(summary, /::/)
   assert.doesNotMatch(summary, /##\[/)
 })
 
-test('error summary omits the API response body', async () => {
+test('error summary neutralizes workflow commands and pipes in the error', async () => {
   const dir = tempDir()
   const { result, env } = await runPull(
     dir,
     { action: 'synchronize', pull_request: { number: 42, base: { ref: 'feat/auth' }, stack: null } },
     summaryEnv(dir),
-    async () => jsonResponse({ message: '::error::pwned ##[warning]x' }, 502),
+    async () => {
+      throw new Error('::error::pwned ##[warning]x | y')
+    },
   )
   const summary = readSummary(env)
   assert.equal(result.should_run, true)
   assert.match(summary, /\| Stack source \| error \|/)
-  assert.doesNotMatch(summary, /pwned/)
+  assert.match(summary, /: :error: :pwned # \[warning\]x \\\| y/)
   assert.doesNotMatch(summary, /::/)
   assert.doesNotMatch(summary, /##\[/)
 })
