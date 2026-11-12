@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import {
   GITHUB_API_VERSION,
   remainingDepthFromStackPulls,
+  resolveContext,
   resolvePull,
 } from './github.mjs'
 
@@ -326,6 +327,270 @@ test('pr_number override returns API labels, not event labels', async () => {
   assert.deepEqual(resolved.labels, ['bug'])
   assert.equal(resolved.prNumber, 11)
   assert.equal(resolved.source, 'api')
+})
+
+test('resolveContext fetches remaining depth for a stacked pull request', async () => {
+  const calls = []
+  let init
+  const resolved = await resolveContext({
+    eventAction: 'synchronize',
+    eventStack: middleStack,
+    eventPrNumber: 12,
+    eventPrBaseRef: 'feat/auth',
+    repo: 'octo/hello',
+    bottomN: 2,
+    token: 't',
+    fetchImpl: async (url, options) => {
+      calls.push(url)
+      init = options
+      assert.match(url, /\/repos\/octo\/hello\/stacks\/50$/)
+      return jsonResponse({
+        number: 50,
+        pull_requests: [
+          { number: 10, state: 'closed' },
+          { number: 11, state: 'open' },
+          { number: 12, state: 'open' },
+          { number: 13, state: 'open' },
+        ],
+      })
+    },
+  })
+  assert.deepEqual(
+    calls.map((url) => url.replace(/.*\/repos\/octo\/hello/, '')),
+    ['/stacks/50'],
+  )
+  assert.equal(init.redirect, 'error')
+  assert.equal(init.headers['X-GitHub-Api-Version'], GITHUB_API_VERSION)
+  assert.equal(resolved.remainingDepth, 2)
+  assert.equal(resolved.prNumber, 12)
+  assert.equal(resolved.source, 'event')
+})
+
+test('resolveContext leaves remaining depth unknown when the stacks GET fails', async () => {
+  const resolved = await resolveContext({
+    eventAction: 'synchronize',
+    eventStack: middleStack,
+    eventPrNumber: 42,
+    eventPrBaseRef: 'feat/auth',
+    repo: 'octo/hello',
+    bottomN: 2,
+    token: 't',
+    fetchImpl: async () => jsonResponse({ message: 'boom' }, 404),
+  })
+  assert.equal(resolved.remainingDepth, null)
+  assert.equal(resolved.stack.position, 2)
+  assert.equal(resolved.lookupProblem.status, 404)
+  assert.equal(resolved.lookupProblem.lookup, 'stack')
+  assert.equal(resolved.lookupProblem.network, false)
+  assert.match(resolved.lookupProblem.message, /stacks\/50 → 404/)
+  assert.doesNotMatch(resolved.lookupProblem.message, /boom/)
+})
+
+test('resolveContext reports a thrown stack lookup without a status', async () => {
+  const fetchImpl = async (url) => {
+    throw new Error(`timed out ${url}`)
+  }
+  const resolved = await resolveContext({
+    eventAction: 'synchronize',
+    eventStack: middleStack,
+    eventPrNumber: 42,
+    eventPrBaseRef: 'feat/auth',
+    repo: 'octo/hello',
+    bottomN: 2,
+    token: 't',
+    fetchImpl,
+  })
+  assert.equal(resolved.lookupProblem.status, undefined)
+  assert.equal(resolved.lookupProblem.network, true)
+  assert.match(resolved.lookupProblem.message, /timed out/)
+})
+
+test('resolveContext has no lookup problem when the stacks GET succeeds', async () => {
+  const resolved = await resolveContext({
+    eventAction: 'synchronize',
+    eventStack: middleStack,
+    eventPrNumber: 42,
+    eventPrBaseRef: 'feat/auth',
+    repo: 'octo/hello',
+    bottomN: 2,
+    token: 't',
+    fetchImpl: async () =>
+      jsonResponse({ pull_requests: [{ number: 42, state: 'open' }] }),
+  })
+  assert.equal(resolved.lookupProblem, null)
+})
+
+test('resolveContext reports a missing token with no event stack', async () => {
+  const resolved = await resolveContext({
+    eventAction: 'synchronize',
+    eventStack: null,
+    eventPrNumber: 42,
+    eventPrBaseRef: 'feat/auth',
+    repo: 'octo/hello',
+    bottomN: 2,
+    token: '',
+  })
+  assert.equal(resolved.source, 'no-token')
+  assert.equal(resolved.lookupProblem.kind, 'no-token')
+  assert.equal(resolved.lookupProblem.quiet, true)
+})
+
+test('resolveContext reports a PR missing from the stack listing as its own cause', async () => {
+  const resolved = await resolveContext({
+    eventAction: 'synchronize',
+    eventStack: middleStack,
+    eventPrNumber: 42,
+    eventPrBaseRef: 'feat/auth',
+    repo: 'octo/hello',
+    bottomN: 2,
+    token: 't',
+    fetchImpl: async () =>
+      jsonResponse({ pull_requests: [{ number: 42, state: 'closed' }, { number: 43, state: 'open' }] }),
+  })
+  assert.equal(resolved.remainingDepth, null)
+  assert.equal(resolved.lookupProblem.kind, 'not-in-stack')
+})
+
+test('a failed pull lookup is tagged as the pull lookup', async () => {
+  await assert.rejects(
+    resolvePull({
+      eventAction: 'synchronize',
+      eventStack: null,
+      eventPrNumber: 42,
+      repo: 'octo/hello',
+      token: 't',
+      fetchImpl: async () => jsonResponse({}, 502),
+    }),
+    (err) => err.status === 502 && err.lookup === 'pull' && err.network === undefined,
+  )
+  await assert.rejects(
+    resolvePull({
+      eventAction: 'synchronize',
+      eventStack: null,
+      eventPrNumber: 42,
+      repo: 'octo/hello',
+      token: 't',
+      fetchImpl: async () => {
+        throw new TypeError('fetch failed')
+      },
+    }),
+    (err) => err.lookup === 'pull' && err.network === true,
+  )
+})
+
+test('resolveContext reports a non-numeric pr-number without fetching', async () => {
+  const resolved = await resolveContext({
+    eventAction: 'synchronize',
+    eventStack: middleStack,
+    eventPrNumber: 42,
+    eventPrBaseRef: 'feat/auth',
+    prNumberOverride: 'abc',
+    repo: 'octo/hello',
+    bottomN: 2,
+    token: 't',
+    fetchImpl: async () => {
+      throw new Error('no fetch')
+    },
+  })
+  assert.equal(resolved.source, 'invalid-pr-number')
+  assert.equal(resolved.stack, null)
+  assert.equal(resolved.lookupProblem.kind, 'invalid-pr-number')
+})
+
+for (const value of ['-3', '0', '1.5', '0x10', '1e3', '012', '+4', '12abc']) {
+  test(`pr-number ${JSON.stringify(value)} is invalid and does not fetch`, async () => {
+    const resolved = await resolveContext({
+      eventAction: 'synchronize',
+      eventStack: middleStack,
+      eventPrNumber: 42,
+      eventPrBaseRef: 'feat/auth',
+      prNumberOverride: value,
+      repo: 'octo/hello',
+      bottomN: 2,
+      token: 't',
+      fetchImpl: async () => {
+        throw new Error('no fetch')
+      },
+    })
+    assert.equal(resolved.source, 'invalid-pr-number')
+    assert.equal(resolved.prNumber, null)
+    assert.equal(resolved.lookupProblem.kind, 'invalid-pr-number')
+  })
+}
+
+test('pr-number with surrounding whitespace is a valid override', async () => {
+  const calls = []
+  const resolved = await resolvePull({
+    eventAction: 'synchronize',
+    eventStack: null,
+    eventPrNumber: 42,
+    eventPrBaseRef: 'feat/auth',
+    prNumberOverride: ' 11 ',
+    repo: 'octo/hello',
+    token: 't',
+    fetchImpl: async (url) => {
+      calls.push(url)
+      return jsonResponse({ number: 11, base: { ref: 'main' }, stack: null })
+    },
+  })
+  assert.equal(resolved.prNumber, 11)
+  assert.match(calls[0], /\/pulls\/11$/)
+})
+
+test('resolveContext does not fetch the stack listing without a token', async () => {
+  let fetches = 0
+  const resolved = await resolveContext({
+    eventAction: 'synchronize',
+    eventStack: middleStack,
+    eventPrNumber: 42,
+    eventPrBaseRef: 'feat/auth',
+    repo: 'octo/hello',
+    bottomN: 2,
+    token: '',
+    fetchImpl: async () => {
+      fetches += 1
+      throw new Error('no fetch')
+    },
+  })
+  assert.equal(fetches, 0)
+  assert.equal(resolved.remainingDepth, null)
+  assert.equal(resolved.source, 'event')
+  assert.equal(resolved.lookupProblem.kind, 'no-token')
+  assert.equal(resolved.lookupProblem.quiet, undefined)
+})
+
+test('resolveContext skips the stack listing when bottom-n is 1', async () => {
+  let fetches = 0
+  const resolved = await resolveContext({
+    eventAction: 'synchronize',
+    eventStack: middleStack,
+    eventPrNumber: 42,
+    eventPrBaseRef: 'feat/auth',
+    repo: 'octo/hello',
+    bottomN: 1,
+    token: 't',
+    fetchImpl: async () => {
+      fetches += 1
+      throw new Error('no fetch')
+    },
+  })
+  assert.equal(fetches, 0)
+  assert.equal(resolved.remainingDepth, null)
+  assert.equal(resolved.lookupProblem, null)
+})
+
+test('resolveContext does not report a missing token when bottom-n is 1', async () => {
+  const resolved = await resolveContext({
+    eventAction: 'synchronize',
+    eventStack: middleStack,
+    eventPrNumber: 42,
+    eventPrBaseRef: 'feat/auth',
+    repo: 'octo/hello',
+    bottomN: 1,
+    token: '',
+  })
+  assert.equal(resolved.source, 'event')
+  assert.equal(resolved.lookupProblem, null)
 })
 
 test('API failure propagates so the gate can fail open', async () => {

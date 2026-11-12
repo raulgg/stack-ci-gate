@@ -7,6 +7,8 @@ export class ConfigError extends Error {
 
 export const PR_EVENTS = new Set(['pull_request', 'pull_request_target'])
 
+export const INVALID_STACK_REASON = 'invalid stack metadata; running CI'
+
 export function parseBottomN(raw) {
   const s = String(raw ?? '1').trim()
   if (s === '') return 1
@@ -102,6 +104,9 @@ function diagnostics(stack, prBaseRef) {
  * Pure should_run decision. remainingDepth is the 1-based index of this PR
  * among unmerged PRs, counting from the current lowest. Pass null when unknown.
  * The force-run label is checked only after the layers that already run.
+ * lookupProblem says why stack data is missing. degraded marks a result that
+ * runs CI only because the gate could not decide; lookupQuiet keeps a missing
+ * stack from being degraded when nothing points to a stack.
  */
 export function decide({
   eventName,
@@ -112,12 +117,19 @@ export function decide({
   remainingDepth = null,
   labelNames = [],
   forceRunLabel = '',
+  lookupProblem = '',
+  lookupQuiet = false,
 }) {
   if (!PR_EVENTS.has(eventName)) {
     return failOpen(`not a pull_request event (${eventName}); running CI`)
   }
 
   if (stack == null) {
+    if (lookupProblem) {
+      return failOpen(`could not read the stack; running CI (${lookupProblem})`, {
+        degraded: !lookupQuiet,
+      })
+    }
     return failOpen('not in a stack; running CI')
   }
 
@@ -126,7 +138,8 @@ export function decide({
   if (!stackLooksValid(stack) || !prBaseRef) {
     return {
       should_run: true,
-      reason: 'invalid stack metadata; running CI',
+      reason: INVALID_STACK_REASON,
+      degraded: true,
       ...diag,
     }
   }
@@ -150,18 +163,21 @@ export function decide({
     return { should_run: true, reason, ...diag }
   }
 
-  if (bottomN > 1 && (depth == null || !Number.isFinite(depth))) {
-    return {
-      should_run: true,
-      reason: 'could not determine remaining stack depth; running CI',
-      ...diag,
-    }
-  }
-
+  // The label decides before an unknown depth, so a labeled PR is not degraded.
   if (hasForceRunLabel(labelNames, forceRunLabel)) {
     return {
       should_run: true,
       reason: `force-run label ${forceRunLabel}`,
+      ...diag,
+    }
+  }
+
+  if (bottomN > 1 && (depth == null || !Number.isFinite(depth))) {
+    const cause = lookupProblem ? ` (${lookupProblem})` : ''
+    return {
+      should_run: true,
+      reason: `could not determine remaining stack depth; running CI${cause}`,
+      degraded: true,
       ...diag,
     }
   }

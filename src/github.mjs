@@ -32,17 +32,28 @@ export function labelNamesFrom(labels) {
   return names
 }
 
+function tagError(err, fields) {
+  const tagged = err instanceof Error ? err : new Error(String(err))
+  return Object.assign(tagged, fields)
+}
+
 async function githubGet(url, { token, fetchImpl, timeoutMs = FETCH_TIMEOUT_MS }) {
-  const res = await fetchImpl(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': GITHUB_API_VERSION,
-      'User-Agent': 'stack-ci-gate',
-    },
-    redirect: 'error',
-    signal: AbortSignal.timeout(timeoutMs),
-  })
+  let res
+  try {
+    res = await fetchImpl(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': GITHUB_API_VERSION,
+        'User-Agent': 'stack-ci-gate',
+      },
+      redirect: 'error',
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+  } catch (err) {
+    // A rejected fetch is a network error or the timeout, not an HTTP status.
+    throw tagError(err, { network: true })
+  }
   if (!res.ok) {
     const err = new Error(`GET ${url} → ${res.status}`)
     err.status = res.status
@@ -85,6 +96,9 @@ function shouldRetryForStack(eventAction) {
   return eventAction === 'opened' || eventAction === 'reopened'
 }
 
+/** A pull request number: digits only, no sign, no leading zero. */
+const PR_NUMBER_PATTERN = /^[1-9]\d*$/
+
 /**
  * Event stack is missing on `opened` (PR is created, then stacked). Fetch the
  * PR resource, and retry briefly on opened/reopened. A pr_number override
@@ -108,6 +122,15 @@ export async function resolvePull({
   timeoutMs = FETCH_TIMEOUT_MS,
 }) {
   const override = String(prNumberOverride ?? '').trim()
+  if (override && !PR_NUMBER_PATTERN.test(override)) {
+    return {
+      prNumber: null,
+      prBaseRef: eventPrBaseRef ?? '',
+      stack: null,
+      labels: [],
+      source: 'invalid-pr-number',
+    }
+  }
   const prNumber = override
     ? Number(override)
     : eventPrNumber == null || eventPrNumber === ''
@@ -149,14 +172,18 @@ export async function resolvePull({
   let lastPr = null
   for (let i = 0; i < delays.length; i++) {
     if (delays[i] > 0) await sleep(delays[i])
-    lastPr = await fetchPullRequest({
-      apiUrl,
-      repo,
-      prNumber,
-      token,
-      fetchImpl,
-      timeoutMs,
-    })
+    try {
+      lastPr = await fetchPullRequest({
+        apiUrl,
+        repo,
+        prNumber,
+        token,
+        fetchImpl,
+        timeoutMs,
+      })
+    } catch (err) {
+      throw tagError(err, { lookup: 'pull' })
+    }
     const stack = normalizeStack(lastPr.stack)
     if (stack) {
       return {
@@ -178,9 +205,25 @@ export async function resolvePull({
   }
 }
 
+function pullLookupProblem(pull, token, bottomN) {
+  if (pull.source === 'invalid-pr-number') {
+    return { kind: 'invalid-pr-number', message: 'pr-number is not a pull request number' }
+  }
+  // Fork and Dependabot pull requests get no secrets. Unless the PR is known
+  // to be stacked and needed the stack listing, an empty token stays quiet.
+  if (pull.source === 'no-token') {
+    return { kind: 'no-token', quiet: true, message: 'no token to read the stack' }
+  }
+  if (!token && bottomN > 1 && pull.stack != null) {
+    return { kind: 'no-token', message: 'no token to read the stack' }
+  }
+  return null
+}
+
 /**
  * Event/API pull plus remaining depth when bottom-n > 1.
- * Listing failures leave remainingDepth null so decide fail-opens.
+ * Listing failures leave remainingDepth null so decide fail-opens,
+ * and lookupProblem says why.
  */
 export async function resolveContext({
   eventAction,
@@ -215,7 +258,8 @@ export async function resolveContext({
   })
 
   let remainingDepth = null
-  if (bottomN > 1 && pull.stack?.number != null) {
+  let lookupProblem = pullLookupProblem(pull, token, bottomN)
+  if (bottomN > 1 && pull.stack?.number != null && token) {
     try {
       const stackPayload = await fetchStack({
         apiUrl,
@@ -225,14 +269,25 @@ export async function resolveContext({
         fetchImpl,
         timeoutMs,
       })
-      remainingDepth = remainingDepthFromStackPulls(
-        stackPayload.pull_requests,
-        pull.prNumber,
-      )
-    } catch {
+      const pulls = stackPayload?.pull_requests
+      remainingDepth = remainingDepthFromStackPulls(pulls, pull.prNumber)
+      if (remainingDepth == null && Array.isArray(pulls)) {
+        lookupProblem = {
+          kind: 'not-in-stack',
+          lookup: 'stack',
+          message: 'this pull request is not open in the stack listing',
+        }
+      }
+    } catch (err) {
       remainingDepth = null
+      lookupProblem = {
+        lookup: 'stack',
+        message: err instanceof Error ? err.message : String(err),
+        status: err?.status,
+        network: err?.network === true,
+      }
     }
   }
 
-  return { ...pull, remainingDepth }
+  return { ...pull, remainingDepth, lookupProblem }
 }

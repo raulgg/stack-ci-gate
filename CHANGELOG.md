@@ -7,10 +7,20 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 ### Added
 
 - The gate step writes a job summary with the decision, the reason, and the stack position.
+- When CI runs only because the gate could not decide, the gate step adds a warning annotation and an `Action needed` job summary section with the cause and the fix.
+- An empty `github-token` warns only on a stacked pull request that needs the stack listing, so fork and Dependabot pull requests stay quiet.
 
 ### Changed
 
 - A failed output write adds a `Stack CI Gate` error annotation that says `should-run` is empty, and the gate step still fails.
+- An invalid input still runs CI, and its error annotation is now titled `Stack CI Gate`. The job summary adds an `Action needed` section.
+- With `bottom-n` above 1, the force-run label is checked before an unknown remaining depth, so a labeled mid-stack pull request reports `force-run label …` and does not warn when the stack lookup fails.
+
+### Fixed
+
+- A missing token or a non-numeric `pr-number` no longer reports `not in a stack`.
+- A `pr-number` that is not a plain pull request number, such as `-3`, `0`, `1.5`, `0x10` or `1e3`, now runs CI and warns about the input. Before, `0x10` and `1e3` gated pull requests 16 and 1000, and the others failed on an API error.
+- `reason` names the failed lookup when remaining depth is unknown with `bottom-n` above 1.
 
 ## 1.1.0 - 2026-10-01
 

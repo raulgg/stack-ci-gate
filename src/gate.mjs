@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import {
   ConfigError,
+  INVALID_STACK_REASON,
   PR_EVENTS,
   decide,
   failOpen,
@@ -43,7 +44,76 @@ function annotation(level, text) {
   return `::${level} title=Stack CI Gate::${safeText(text).replaceAll('%', '%25')}`
 }
 
-const UNKNOWN_STACK_SOURCES = new Set(['error', 'no-token', 'invalid-input', 'none'])
+function isTransient(problem) {
+  return problem.status === 429 || problem.status >= 500 || problem.network === true
+}
+
+function degradedHint(problem) {
+  if (problem == null) {
+    return 'GitHub sent stack data this action could not use. Update to the latest release.'
+  }
+  if (problem.kind === 'no-token') {
+    return 'github-token is empty. Pull requests from forks and Dependabot get no secrets, so set github-token to ${{ secrets.NAME || github.token }} to fall back to the default token.'
+  }
+  if (problem.kind === 'invalid-pr-number') {
+    return 'Set pr-number to a pull request number, or leave it unset.'
+  }
+  if (problem.kind === 'not-in-stack') {
+    return 'The pull request is not open in its stack, for example after a merge, a close or an unstack. If it is still open in a stack, re-run.'
+  }
+  if (problem.status === 401) return 'Check the github-token input.'
+  if (problem.status === 403) {
+    return 'Add pull-requests: read to the gate job. If it is already there, the token may have hit a rate limit.'
+  }
+  if (problem.status === 404) {
+    if (problem.lookup === 'stack') {
+      return 'The stack may have changed; re-run. If it repeats, add pull-requests: read to the gate job.'
+    }
+    return problem.prNumberOverride && problem.lookup === 'pull'
+      ? 'Check pr-number, or add pull-requests: read to the gate job.'
+      : 'Add pull-requests: read to the gate job.'
+  }
+  if (isTransient(problem)) return 'This is usually temporary.'
+  return 'Re-run the job. If it repeats, open an issue on raulgg/stack-ci-gate.'
+}
+
+/** The lookup problem behind a degraded result. Bad stack data is its own cause. */
+function degradedCause(result, problem) {
+  return result.reason === INVALID_STACK_REASON ? null : problem
+}
+
+function actionHint(result, trace) {
+  if (trace.source === 'invalid-input') return 'Check the input values on the gate step.'
+  return degradedHint(degradedCause(result, trace.problem))
+}
+
+function reportProblem(log, result, trace) {
+  const problem = trace.problem
+  // Invalid input already logged an error annotation with the cause.
+  if (result.degraded && trace.source !== 'invalid-input') {
+    const cause = degradedCause(result, problem)
+    log.warn(
+      annotation(
+        'warning',
+        `Could not gate stacked CI; running checks by default. (${cause?.message ?? result.reason}) ${actionHint(result, trace)}`,
+      ),
+    )
+  } else if (problem?.quiet) {
+    log.log('github-token is empty, so the gate did not look for a stack; running CI.')
+  } else if (problem) {
+    log.log(
+      `Stack lookup failed; the decision did not need it. (${safeText(problem.message)}) ${degradedHint(problem)}`,
+    )
+  }
+}
+
+const UNKNOWN_STACK_SOURCES = new Set([
+  'error',
+  'no-token',
+  'invalid-input',
+  'invalid-pr-number',
+  'none',
+])
 
 function stackFlag(value, source) {
   if (UNKNOWN_STACK_SOURCES.has(source)) return 'unknown'
@@ -79,9 +149,16 @@ function summaryMarkdown({ result, trace }) {
     ['Event', summaryCell(eventLabel(trace))],
     ['Stack source', summaryCell(trace.source || 'unknown')],
   ]
+  if (trace.problem) {
+    const field = trace.problem.lookup ? 'Stack lookup' : 'Error'
+    rows.push([field, summaryCell(trace.problem.message)])
+  }
   let markdown = '# Stack CI Gate\n\n| Field | Value |\n| --- | --- |\n'
   for (const [field, value] of rows) {
     markdown += `| ${field} | ${value} |\n`
+  }
+  if (result.degraded) {
+    markdown += `\n## Action needed\n\nCI ran because the gate could not decide. ${actionHint(result, trace)}\n`
   }
   return markdown
 }
@@ -142,6 +219,7 @@ export async function run(env = process.env, deps = {}) {
         ),
       )
     }
+    reportProblem(log, result, trace)
     writeJobSummary(env.GITHUB_STEP_SUMMARY, { result, trace }, log)
   }
 
@@ -154,8 +232,10 @@ export async function run(env = process.env, deps = {}) {
     forceRunLabel = parseForceRunLabel(inputValue(env, 'force-run-label'))
   } catch (err) {
     if (err instanceof ConfigError) {
-      log.error(`::error::${safeText(err.message)}`)
-      const result = failOpen(`invalid input; running CI (${safeText(err.message)})`)
+      log.error(annotation('error', err.message))
+      const result = failOpen(`invalid input; running CI (${safeText(err.message)})`, {
+        degraded: true,
+      })
       write(result, { eventName: env.GITHUB_EVENT_NAME || '', source: 'invalid-input' })
       return { exitCode, result, error: err }
     }
@@ -164,6 +244,11 @@ export async function run(env = process.env, deps = {}) {
 
   const eventName = env.GITHUB_EVENT_NAME || ''
   let event = {}
+  const prNumberRaw = inputValue(env, 'pr-number')
+  const hasPrNumberOverride = String(prNumberRaw ?? '').trim() !== ''
+  // The hint for a 404 on the pull lookup depends on whether pr-number chose it.
+  const withOverride = (problem) =>
+    problem && hasPrNumberOverride ? { ...problem, prNumberOverride: true } : problem
 
   try {
     if (!PR_EVENTS.has(eventName)) {
@@ -180,7 +265,6 @@ export async function run(env = process.env, deps = {}) {
 
     event = readEvent(env.GITHUB_EVENT_PATH)
     const pr = event.pull_request ?? {}
-    const prNumberRaw = inputValue(env, 'pr-number')
     const resolved = await resolveContext({
       eventAction: event.action,
       eventStack: pr.stack,
@@ -196,7 +280,6 @@ export async function run(env = process.env, deps = {}) {
       bottomN,
     })
 
-    const hasPrNumberOverride = String(prNumberRaw ?? '').trim() !== ''
     const labelNames = hasPrNumberOverride
       ? resolved.labels
       : applyLabelChange(resolved.labels, event.action, event.label?.name)
@@ -210,19 +293,31 @@ export async function run(env = process.env, deps = {}) {
       remainingDepth: resolved.remainingDepth,
       labelNames,
       forceRunLabel,
+      lookupProblem: resolved.lookupProblem ? safeText(resolved.lookupProblem.message) : '',
+      lookupQuiet: resolved.lookupProblem?.quiet === true,
     })
     write(result, {
       eventName,
       eventAction: event.action,
       source: resolved.source,
       eventStack: pr.stack,
+      problem: withOverride(resolved.lookupProblem),
     })
     return { exitCode, result }
   } catch (err) {
     const message = safeText(err instanceof Error ? err.message : String(err))
-    log.warn(`Could not gate stacked CI; running checks by default. (${message})`)
-    const result = failOpen(`error; running CI (${message})`)
-    write(result, { eventName, eventAction: event?.action, source: 'error' })
+    const result = failOpen(`error; running CI (${message})`, { degraded: true })
+    write(result, {
+      eventName,
+      eventAction: event?.action,
+      source: 'error',
+      problem: withOverride({
+        message,
+        status: err?.status,
+        lookup: err?.lookup,
+        network: err?.network === true,
+      }),
+    })
     return { exitCode, result }
   }
 }
