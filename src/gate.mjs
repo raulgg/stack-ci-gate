@@ -38,7 +38,7 @@ function safeText(text) {
   return oneLine(text).replaceAll('::', ': :').replaceAll('##[', '# [')
 }
 
-/** The runner decodes % sequences in messages, so %0A would start a new line. */
+/** GitHub reads % codes in annotation text, so escape % to keep text like %0A from turning into a line break. */
 function annotation(level, text) {
   return `::${level} title=Stack CI Gate::${safeText(text).replaceAll('%', '%25')}`
 }
