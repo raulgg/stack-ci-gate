@@ -1075,7 +1075,7 @@ test('error summary keeps the event action', async () => {
   const { env } = await runPull(
     dir,
     { action: 'opened', pull_request: { number: 42, base: { ref: 'feat/auth' }, stack: null } },
-    summaryEnv(dir),
+    summaryEnv(dir, { 'INPUT_STACK-WAIT-SECONDS': '0' }),
     async () => jsonResponse({}, 502),
   )
   const summary = readSummary(env)
