@@ -19,7 +19,7 @@ inputs:
     required: false
     default: 'stack-ci:run'
   stack-wait-seconds:
-    description: On opened or reopened, seconds to wait for the stack when the base is not the default branch (0-300)
+    description: On opened or reopened, seconds to wait for the stack when another open PR could sit below this one (0-100). About 50 or less keeps a separate gate job at 1 billed minute.
     required: false
     default: '40'
   github-token:

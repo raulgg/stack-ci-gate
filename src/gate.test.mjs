@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { run } from './gate.mjs'
+import { run as runRaw } from './gate.mjs'
 
 function jsonResponse(body, status = 200) {
   return {
@@ -13,6 +13,15 @@ function jsonResponse(body, status = 200) {
     text: async () => JSON.stringify(body),
   }
 }
+
+/** Answers the base-head lookup (a PR below exists by default), so tests count only pull fetches. */
+function withBaseHead(fetchImpl, list = [{ number: 41 }]) {
+  return async (url, init) =>
+    String(url).includes('/pulls?') ? jsonResponse(list) : fetchImpl(url, init)
+}
+
+// Most tests are about the pull fetch; the base-head lookup has its own tests with runRaw.
+const run = (env, deps = {}) => runRaw(env, { ...deps, fetch: deps.fetch && withBaseHead(deps.fetch) })
 
 function parseOutputs(file) {
   const out = {}
@@ -1730,7 +1739,7 @@ test('opened into the default branch fetches once without waiting', async () => 
   assert.equal(result.should_run, true)
   assert.equal(result.degraded, undefined)
   const trace = out.lines.log.find((line) => line.includes('gate-trace'))
-  assert.match(trace, / waited_ms=0$/)
+  assert.match(trace, / waited_ms=0 base_head_pr=/)
   assert.ok(!out.lines.log.some((line) => WAIT_LINE.test(line)))
   const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
   assert.doesNotMatch(summary, /Waited for stack/)
@@ -1882,7 +1891,7 @@ test('invalid stack-wait-seconds fail-opens with an error annotation', async () 
   const env = baseEnv(dir, {
     GITHUB_EVENT_NAME: 'pull_request',
     GITHUB_EVENT_PATH: openedEvent(dir, { baseRef: 'feat/auth' }),
-    'INPUT_STACK-WAIT-SECONDS': '301',
+    'INPUT_STACK-WAIT-SECONDS': '101',
     ...summaryEnv(dir),
   })
   const out = capture()
@@ -1942,7 +1951,7 @@ test('gate-trace lists change keys and never their values', async () => {
   })
   const trace = out.lines.log.find((line) => line.includes('gate-trace'))
   assert.match(trace, / changes=base,title /)
-  assert.match(trace, / waited_ms=0$/)
+  assert.match(trace, / waited_ms=0 base_head_pr=/)
   assert.doesNotMatch(trace, /secret-title-value|feat\/old|deadbeef|Bad-Key|warning/)
 })
 
@@ -2000,7 +2009,7 @@ for (const [base, calls] of [
     })
     assert.equal(fetches, calls)
     assert.equal(result.should_run, true)
-    assert.match(trace, base === 'develop' ? / waited_ms=0$/ : / waited_ms=40000$/)
+    assert.match(trace, base === 'develop' ? / waited_ms=0 base_head_pr=/ : / waited_ms=40000 base_head_pr=/)
   })
 }
 
@@ -2039,7 +2048,7 @@ test('a 502 mid-wait keeps polling and the PR still skips mid-stack', async () =
   assert.equal(calls, 4)
   assert.equal(result.should_run, false)
   assert.deepEqual(lines.warn, [])
-  assert.match(trace, / waited_ms=6000$/)
+  assert.match(trace, / waited_ms=6000 base_head_pr=/)
 })
 
 test('an error mid-wait keeps the action and the real wait in gate-trace and the summary', async () => {
@@ -2057,7 +2066,7 @@ test('an error mid-wait keeps the action and the real wait in gate-trace and the
   assert.equal(result.degraded, true)
   assert.equal(lines.warn.length, 1)
   assert.match(trace, /^gate-trace event=pull_request action=opened source=error /)
-  assert.match(trace, / waited_ms=3000$/)
+  assert.match(trace, / waited_ms=3000 base_head_pr=/)
   assert.match(summary, /\| Waited for stack \| 3 s \|/)
   assert.match(summary, /\| Event \| pull_request opened \|/)
 })
@@ -2072,5 +2081,33 @@ test('a timeout on the last poll fails open with the full wait', async () => {
   })
   assert.equal(result.should_run, true)
   assert.equal(result.degraded, true)
-  assert.match(trace, / waited_ms=6000$/)
+  assert.match(trace, / waited_ms=6000 base_head_pr=/)
+})
+
+test('a standalone PR into another branch decides at once and traces base_head_pr=none', async () => {
+  const dir = tempDir()
+  const env = baseEnv(dir, {
+    ...summaryEnv(dir),
+    GITHUB_EVENT_NAME: 'pull_request',
+    GITHUB_EVENT_PATH: openedEvent(dir, { baseRef: 'develop' }),
+  })
+  const out = capture()
+  let pullCalls = 0
+  const { result } = await runRaw(env, {
+    log: out.log,
+    sleep: async () => {
+      throw new Error('should not sleep')
+    },
+    fetch: async (url) => {
+      if (String(url).includes('/pulls?')) return jsonResponse([])
+      pullCalls += 1
+      return jsonResponse({ number: 42, base: { ref: 'develop' }, stack: null })
+    },
+  })
+  assert.equal(pullCalls, 1)
+  assert.equal(result.should_run, true)
+  const trace = out.lines.log.find((line) => line.includes('gate-trace'))
+  assert.match(trace, / waited_ms=0 base_head_pr=none$/)
+  assert.ok(!out.lines.log.some((line) => /^Waited /.test(line)))
+  assert.doesNotMatch(fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8'), /Waited for stack/)
 })

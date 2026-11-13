@@ -512,14 +512,15 @@ test('parseForceRunLabel defaults when missing and disables on empty', () => {
   assert.equal(parseForceRunLabel('  ship it  '), 'ship it')
 })
 
-test('parseStackWaitSeconds defaults to 40 and accepts 0 to 300', () => {
+test('parseStackWaitSeconds defaults to 40 and accepts 0 to 100', () => {
   assert.equal(parseStackWaitSeconds(undefined), 40)
   assert.equal(parseStackWaitSeconds(''), 40)
   assert.equal(parseStackWaitSeconds('  '), 40)
   assert.equal(parseStackWaitSeconds('0'), 0)
-  assert.equal(parseStackWaitSeconds(' 90 '), 90)
-  assert.equal(parseStackWaitSeconds('300'), 300)
-  for (const bad of ['301', '-1', '1.5', 'soon', '40s']) {
+  assert.equal(parseStackWaitSeconds(' 6 '), 6)
+  assert.equal(parseStackWaitSeconds('45'), 45)
+  assert.equal(parseStackWaitSeconds('100'), 100)
+  for (const bad of ['101', '300', '-1', '1.5', 'soon', '40s']) {
     assert.throws(() => parseStackWaitSeconds(bad), ConfigError)
   }
 })

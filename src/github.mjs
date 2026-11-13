@@ -10,6 +10,14 @@ export const DEFAULT_STACK_WAIT_MS = DEFAULT_STACK_WAIT_SECONDS * 1000
 /** A budget up to this long (the ~6 s retry of 1.1.0) stays quiet when it runs out. */
 const SHORT_WAIT_MS = 6000
 
+/** A fetch near the deadline still gets this long, so it is not cut off at once. */
+export const MIN_WAIT_FETCH_TIMEOUT_MS = 2000
+
+/** During a wait, a fetch may not run past the deadline by more than the floor. */
+export function waitFetchTimeoutMs(remainingMs, timeoutMs = FETCH_TIMEOUT_MS) {
+  return Math.min(timeoutMs, Math.max(remainingMs, MIN_WAIT_FETCH_TIMEOUT_MS))
+}
+
 /** 0, 1, 2, 3 s, then every 5 s, until the delays add up to totalMs. */
 export function stackWaitDelays(totalMs) {
   const delays = [0]
@@ -55,7 +63,10 @@ function tagError(err, fields) {
   return Object.assign(tagged, fields)
 }
 
-async function githubGet(url, { token, fetchImpl, timeoutMs = FETCH_TIMEOUT_MS }) {
+async function githubGet(
+  url,
+  { token, fetchImpl, timeoutMs = FETCH_TIMEOUT_MS, timeoutSignal = AbortSignal.timeout },
+) {
   let res
   try {
     res = await fetchImpl(url, {
@@ -66,7 +77,7 @@ async function githubGet(url, { token, fetchImpl, timeoutMs = FETCH_TIMEOUT_MS }
         'User-Agent': 'stack-ci-gate',
       },
       redirect: 'error',
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: timeoutSignal(timeoutMs),
     })
   } catch (err) {
     // A rejected fetch is a network error or the timeout, not an HTTP status.
@@ -80,6 +91,29 @@ async function githubGet(url, { token, fetchImpl, timeoutMs = FETCH_TIMEOUT_MS }
   return res.json()
 }
 
+/**
+ * gh stack submit opens PRs bottom-first, so a PR in a new stack has an open
+ * PR whose head is its base. 'none' means nothing can be stacked below this
+ * PR, so with bottom-n of 1 or more it runs either way. Any failure reports
+ * 'error', and the caller keeps waiting.
+ */
+async function findBaseHeadPr({ apiUrl, repo, pr, token, fetchImpl, timeoutMs, timeoutSignal }) {
+  const ref = pr?.base?.ref
+  const owner = pr?.base?.repo?.owner?.login || String(repo).split('/')[0]
+  if (!ref || !owner) return 'error'
+  const head = encodeURIComponent(`${owner}:${ref}`)
+  try {
+    const list = await githubGet(
+      `${apiUrl}/repos/${repo}/pulls?state=open&head=${head}&per_page=1`,
+      { token, fetchImpl, timeoutMs, timeoutSignal },
+    )
+    if (!Array.isArray(list)) return 'error'
+    return list.length === 0 ? 'none' : 'found'
+  } catch {
+    return 'error'
+  }
+}
+
 export async function fetchPullRequest({
   apiUrl = DEFAULT_API,
   repo,
@@ -87,11 +121,13 @@ export async function fetchPullRequest({
   token,
   fetchImpl = globalThis.fetch,
   timeoutMs = FETCH_TIMEOUT_MS,
+  timeoutSignal,
 }) {
   return githubGet(`${apiUrl}/repos/${repo}/pulls/${prNumber}`, {
     token,
     fetchImpl,
     timeoutMs,
+    timeoutSignal,
   })
 }
 
@@ -164,6 +200,7 @@ export async function resolvePull({
   stackWaitMs = DEFAULT_STACK_WAIT_MS,
   bottomN = 1,
   timeoutMs = FETCH_TIMEOUT_MS,
+  timeoutSignal,
 }) {
   const override = String(prNumberOverride ?? '').trim()
   if (override && !PR_NUMBER_PATTERN.test(override)) {
@@ -220,6 +257,7 @@ export async function resolvePull({
   let lastPr = null
   let waitedMs = 0
   let fetchMs = 0
+  let baseHeadPr
   for (let i = 0; i < delays.length; i++) {
     // The fetch time counts against the next sleep, so the wait stays in budget.
     const pause = Math.min(Math.max(delays[i] - fetchMs, 0), Math.max(deadline - now(), 0))
@@ -235,10 +273,11 @@ export async function resolvePull({
         prNumber,
         token,
         fetchImpl,
-        timeoutMs,
+        timeoutMs: budgetMs > 0 ? waitFetchTimeoutMs(deadline - fetchStart, timeoutMs) : timeoutMs,
+        timeoutSignal,
       })
     } catch (err) {
-      const tagged = tagError(err, { lookup: 'pull', waitedMs })
+      const tagged = tagError(err, { lookup: 'pull', waitedMs, baseHeadPr })
       if (lastAttempt || !isRetryable(tagged)) throw tagged
       fetchMs = now() - fetchStart
       continue
@@ -254,9 +293,24 @@ export async function resolvePull({
         labels: labelNamesFrom(lastPr.labels),
         source: 'api',
         waitedMs,
+        baseHeadPr,
       }
     }
     if (intoDefaultBranch(lastPr, defaultBranch, bottomN)) break
+    if (budgetMs > 0 && bottomN >= 1 && baseHeadPr === undefined) {
+      const lookupStart = now()
+      baseHeadPr = await findBaseHeadPr({
+        apiUrl,
+        repo,
+        pr: lastPr,
+        token,
+        fetchImpl,
+        timeoutMs: waitFetchTimeoutMs(deadline - lookupStart, timeoutMs),
+        timeoutSignal,
+      })
+      fetchMs += now() - lookupStart
+      if (baseHeadPr === 'none') break
+    }
     if (fetchStart >= deadline) break
   }
 
@@ -267,8 +321,12 @@ export async function resolvePull({
     labels: labelNamesFrom(lastPr?.labels),
     source: 'api',
     waitedMs,
+    baseHeadPr,
     stackWaitTimedOut:
-      polls && budgetMs > SHORT_WAIT_MS && !intoDefaultBranch(lastPr, defaultBranch, bottomN),
+      polls &&
+      budgetMs > SHORT_WAIT_MS &&
+      baseHeadPr !== 'none' &&
+      !intoDefaultBranch(lastPr, defaultBranch, bottomN),
   }
 }
 

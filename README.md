@@ -105,7 +105,7 @@ Jobs that should still run on every layer, such as lint or labeler, omit `needs:
 | `bottom-n`           | `1`                   | How many PRs at the remaining bottom always run.                                            |
 | `run-top`            | `true`                | Also run the top PR (the full set of changes).                                              |
 | `force-run-label`    | `stack-ci:run`        | Label that forces a mid-stack run. Create it in the repo. Empty disables.                   |
-| `stack-wait-seconds` | `40`                  | Seconds to wait for the stack on `opened` and `reopened` into a non-default base. 0 to 300. |
+| `stack-wait-seconds` | `40`                  | Seconds to wait for the stack on `opened` and `reopened` when another open PR could sit below this one. 0 to 100. See [Waiting for the stack](#waiting-for-the-stack-on-opened). |
 | `github-token`       | `${{ github.token }}` | Reads stack membership. Needs `pull-requests: read` on the gate job.                        |
 | `pr-number`          | event PR              | Override which PR to gate on `pull_request`. Leave unset in the recipe.                     |
 
@@ -153,11 +153,43 @@ The gate job only runs when the workflow starts. List every type this action nee
 | `stacked` | `gh stack link` on PRs that already existed. |
 | `labeled` | Force-run without a push. Any added label starts a run. Only the force-run label turns a skip into a run. Leave this type out when you will not use the force-run label. |
 
-`gh stack submit` opens every PR first and links the stack afterwards, so the `opened` event has no stack yet. With `bottom-n` of 1 or more, a PR into the default branch runs either way, so the gate does not wait for it. For any other base, the gate polls for the stack for up to `stack-wait-seconds`, about one API request per 5 seconds of wait per PR. A PR into another branch that never joins a stack waits the full `stack-wait-seconds` on `opened` and `reopened`, so in the layout above its gated jobs start up to that much later. Lower `stack-wait-seconds` to shorten that. Raise it if mid-stack PRs from a large `gh stack submit` still run. If the gate is a step in the same job as the work it gates, the wait blocks that job, so put the gate step after the steps that run on every layer.
-
-With that shortcut, the bottom PR of a new stack on the default branch does not wait on `opened`, so that run reports `is-stacked` as `'false'` with an empty `position` and `size`. Later events, such as `stacked`, report its place in the stack.
-
 GitHub's default is `opened`, `synchronize`, `reopened`. Without `edited`, a remaining-bottom retarget never starts the gate. Without `stacked`, linking already-open PRs never starts it. A workflow that leaves out `labeled` still force-runs on the next push while the label is on the pull request.
+
+### Waiting for the stack on `opened`
+
+`gh stack submit` opens every PR first and links them into a stack a few seconds later. So on `opened`, the gate can't see the stack yet. On `opened` and `reopened` it checks again about every 5 seconds, for up to `stack-wait-seconds` (default 40). Other events decide in a few seconds.
+
+**No wait.** With `bottom-n` of 1 or more (the default), these PRs are decided at once, because they run CI either way:
+
+- A PR into the default branch.
+- A PR whose base branch no open PR comes from, so nothing can be stacked below it. Checking this costs one API request.
+
+The bottom PR of a new stack is usually one of these. Its `opened` run reports `is-stacked` as `'false'`, with empty `position` and `size`. Later events, such as `stacked`, report its place in the stack.
+
+**Full wait, then CI runs.** These PRs wait the full `stack-wait-seconds`, so their gated jobs start that much later:
+
+- A chain of PRs outside a GitHub stack.
+- A stack opened top-first by hand.
+- A PR into a long-lived branch that has its own open PR, such as `develop` with an open `develop` → `main` PR.
+
+**With `bottom-n: 0`, every PR waits.** The bottom PR should skip too, and on `opened` it looks just like a standalone PR. So a standalone PR waits the full time before it runs. The bottom PR of an N-PR submit waits longest, about 4.5 × N − 2.5 seconds, so 40 covers about 9 PRs.
+
+**Picking a value.** In a test, `gh stack submit` opened PRs about 4.5 seconds apart. The second PR of an N-PR submit needed about 4.5 × N − 12 seconds of wait.
+
+| `stack-wait-seconds` | When to use it |
+| -------------------- | -------------- |
+| `0` | Your repo doesn't use `gh stack submit`. |
+| `6` | You want 1.1.0's wait. |
+| `40` (default) | Covers a submit of about 11 PRs. |
+| `100` (maximum) | Covers a submit of about 25 PRs. |
+
+In a bigger submit than the wait covers, the lowest mid-stack PRs run CI.
+
+**What the wait costs.**
+
+- A separate gate job takes about the wait plus 5 seconds. Up to a wait of about 50 seconds, that's 1 billed minute.
+- Each extra 60 seconds or so adds about 1 billed minute. Only PRs that wait the full time pay it: the lowest mid-stack PRs of a large submit, and the full-wait cases above.
+- In a one-job layout the wait runs in a job that runs anyway, so there's no gate job to pay for. Put the gate step after the steps that run on every layer.
 
 ## You might not need this action
 

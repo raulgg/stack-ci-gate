@@ -12,6 +12,8 @@ export const INVALID_STACK_REASON = 'invalid stack metadata; running CI'
 /** How long opened/reopened waits for the stack by default. action.yml repeats it. */
 export const DEFAULT_STACK_WAIT_SECONDS = 40
 
+export const MAX_STACK_WAIT_SECONDS = 100
+
 export function parseBottomN(raw) {
   const s = String(raw ?? '1').trim()
   if (s === '') return 1
@@ -34,9 +36,9 @@ export function parseRunTop(raw) {
 export function parseStackWaitSeconds(raw) {
   const s = String(raw ?? '').trim()
   if (s === '') return DEFAULT_STACK_WAIT_SECONDS
-  if (!/^\d+$/.test(s) || Number(s) > 300) {
+  if (!/^\d+$/.test(s) || Number(s) > MAX_STACK_WAIT_SECONDS) {
     throw new ConfigError(
-      `stack-wait-seconds must be an integer from 0 to 300, got ${JSON.stringify(raw)}`,
+      `stack-wait-seconds must be an integer from 0 to ${MAX_STACK_WAIT_SECONDS}, got ${JSON.stringify(raw)}`,
     )
   }
   return Number(s)

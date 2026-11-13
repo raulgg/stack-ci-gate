@@ -211,7 +211,7 @@ function writeOutputs(outputPath, result, log, trace = {}) {
   appendOutput(outputPath, 'size', result.size ?? '')
   log.log(reason)
   log.log(
-    `gate-trace event=${trace.eventName ?? ''} action=${trace.eventAction ?? ''} source=${trace.source ?? ''} event_stack=${trace.eventStack ? 'yes' : 'no'} changes=${changeKeys(trace.changes)} waited_ms=${trace.waitedMs ?? 0}`,
+    `gate-trace event=${trace.eventName ?? ''} action=${trace.eventAction ?? ''} source=${trace.source ?? ''} event_stack=${trace.eventStack ? 'yes' : 'no'} changes=${changeKeys(trace.changes)} waited_ms=${trace.waitedMs ?? 0} base_head_pr=${trace.baseHeadPr ?? ''}`,
   )
 }
 
@@ -330,6 +330,7 @@ export async function run(env = process.env, deps = {}) {
       eventStack: pr.stack,
       changes: event.changes,
       waitedMs: resolved.waitedMs,
+      baseHeadPr: resolved.baseHeadPr,
       stackWaitTimedOut: resolved.stackWaitTimedOut,
       problem: withOverride(resolved.lookupProblem),
     })
@@ -343,6 +344,7 @@ export async function run(env = process.env, deps = {}) {
       source: 'error',
       changes: event?.changes,
       waitedMs: err?.waitedMs,
+      baseHeadPr: err?.baseHeadPr,
       problem: withOverride({
         message,
         status: err?.status,
