@@ -177,7 +177,9 @@ function intoDefaultBranch(pr, defaultBranch, bottomN) {
  * is the time from the first fetch to the start of the last one;
  * stackWaitTimedOut is true when a budget longer than the short retry ended
  * without a stack. A 429, 5xx or network error mid-wait is retried while
- * budget remains; a thrown error carries waitedMs. A pr_number override
+ * budget remains. On the last attempt it ends the wait as "no stack" when an
+ * earlier fetch succeeded, and throws otherwise. A thrown error carries
+ * waitedMs. A pr_number override
  * always uses the API and ignores the triggering event's stack.
  * Labels come from that same pull request: the event payload when its stack
  * is used, otherwise the fetched body.
@@ -276,9 +278,17 @@ export async function resolvePull({
         timeoutMs: budgetMs > 0 ? waitFetchTimeoutMs(deadline - fetchStart, timeoutMs) : timeoutMs,
         timeoutSignal,
       })
+      // A 200 with a body that is not an object is not retried: like an
+      // unparsable body, it is not a known transient failure.
+      if (pr === null || typeof pr !== 'object') throw new Error('unexpected pull request body')
     } catch (err) {
       const tagged = tagError(err, { lookup: 'pull', waitedMs, baseHeadPr })
-      if (lastAttempt || !isRetryable(tagged)) throw tagged
+      if (!isRetryable(tagged)) throw tagged
+      if (lastAttempt) {
+        // An earlier fetch already said "no stack", so the wait ends as a timeout.
+        if (lastPr) break
+        throw tagged
+      }
       fetchMs = now() - fetchStart
       continue
     }
@@ -297,7 +307,8 @@ export async function resolvePull({
       }
     }
     if (intoDefaultBranch(lastPr, defaultBranch, bottomN)) break
-    if (budgetMs > 0 && bottomN >= 1 && baseHeadPr === undefined) {
+    // On the last attempt the lookup could not shorten the wait, so skip it.
+    if (budgetMs > 0 && bottomN >= 1 && baseHeadPr === undefined && !lastAttempt) {
       const lookupStart = now()
       baseHeadPr = await findBaseHeadPr({
         apiUrl,
