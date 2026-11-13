@@ -49,7 +49,7 @@ needs: gate
 if: ${{ !cancelled() && needs.gate.outputs.should-run != 'false' }}
 ```
 
-`'true'` and `'false'` are the only values the gate writes. If the gate job is skipped or fails, `should-run` is empty and the job runs. `!cancelled()` runs the job even when the gate job itself fails. The gate's own failure never produces a Skipped required job. [What fails open](#what-fails-open)
+The gate writes only `'true'` or `'false'`. If the gate job fails or is skipped, `should-run` is empty and the job runs. `!cancelled()` is what lets it run after a failed gate job. See [What fails open](#what-fails-open) for the exceptions.
 
 ### Have an agent set this up for you
 
@@ -104,7 +104,7 @@ jobs:
 
 Jobs that should still run on every layer, such as lint or labeler, omit `needs: gate` and the `if:`.
 
-With `!cancelled()`, a job also runs when another job in its `needs` failed. When a gated job needs other jobs too, add `&& needs.<other>.result == 'success'` for each of them.
+With `!cancelled()`, a job also runs when another job in its `needs` failed. When a gated job needs other jobs too, add `&& needs.<other>.result == 'success'` for each of them. This checks direct needs only. If a job further up the chain can fail while a direct need still succeeds, add that job to `needs` and check it too.
 
 ### Inputs
 
@@ -200,10 +200,6 @@ In a bigger submit than the wait covers, the lowest mid-stack PRs run CI.
 - A wait above about 50 seconds makes it 2 billed minutes. Only PRs that wait the full time pay it: the lowest mid-stack PRs of a large submit, and the full-wait cases above.
 - In a one-job layout the wait runs in a job that runs anyway, so there's no gate job to pay for. Put the gate step after the steps that run on every layer.
 
-## Known gaps
-
-- A later run that skips a required job on the same commit replaces an earlier Failure, so a job-level event filter on the gate job or a required job can make a failing PR mergeable. See [A skipped run can replace a failure](#a-skipped-run-can-replace-a-failure).
-
 ## You might not need this action
 
 GitHub documents conditions for "lowest unmerged or top" in [Optimizing CI for stacked pull requests](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/optimizing-ci-for-stacked-pull-requests). On a job it looks like this:
@@ -247,18 +243,27 @@ A workflow that never starts (path filters, `[skip ci]`, workflow-level `if:`) l
 
 ### A skipped run can replace a failure
 
-A later run that skips a required job on the same commit replaces an earlier **Failure** for that check, and a failing PR can become mergeable. This was tested live: with `test` required, a PR had `test` Failure and was blocked. A title edit started a run whose job-level `if:` skipped the gate job, `test` reported Skipped, and GitHub reported the PR mergeable. So do not add job-level `if:` filters on events (title or body edits, labels, drafts) to the gate job or to required jobs of a gated workflow. Filter with `on:` types instead, so the event starts no run. Mid-stack Skipped checks are by design. The same mechanism means a PR that failed CI and later became mid-stack on the same commit shows its gated checks as Skipped until it becomes the remaining bottom or the top again.
+A later run that skips a required job on the same commit replaces an earlier **Failure** for that check, and a failing PR can become mergeable.
+
+This was tested live. With `test` required, a PR had `test` Failure and was blocked. A title edit started a run whose job-level `if:` skipped the gate job, `test` reported Skipped, and GitHub reported the PR mergeable.
+
+- **Do not** add job-level `if:` filters on events (title or body edits, labels, drafts) to the gate job or to required jobs of a gated workflow.
+- **Do instead** filter with `on:` types, so the event starts no run.
+
+Mid-stack Skipped checks are by design.
+
+The same mechanism means a PR that failed CI and later became mid-stack on the same commit shows its gated checks as Skipped until it becomes the remaining bottom or the top again.
 
 ### What fails open
 
 The recipe runs gated jobs when the gate fails. Two parts cover two different failures:
 
 - `continue-on-error: true` on the gate step covers a failed gate step: an error inside the action, or a failed output write. The step's conclusion is Success, so the gate job succeeds with `should-run` empty, and `!= 'false'` runs the gated jobs.
-- `!cancelled()` on the jobs that need the gate covers a gate job that fails outside its step: the action fails to download during job setup, the runner is lost, the job times out, or an earlier step such as checkout fails. `should-run` is then empty, and `!= 'false'` runs the job. Without a status function, GitHub skips the jobs that need a failed job, and a job skipped because a needed job failed [may not block merging](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks).
+- `!cancelled()` on the jobs that need the gate covers a gate job that fails outside its step: the action fails to download during job setup, the runner is lost, or an earlier step such as checkout fails. `should-run` is then empty, and `!= 'false'` runs the job. When the gate job times out, GitHub reports it as cancelled, but the run is not cancelled, so `!cancelled()` stays true and the gated jobs run (tested live). Without a status function, GitHub skips the jobs that need a failed job, and a job skipped because a needed job failed [may not block merging](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks).
 
 A skipped gate job also leaves `should-run` empty, so the gated jobs run.
 
-Not covered: a cancelled run, a workflow that never starts, and jobs gated on `is-bottom == 'true'` or `is-top == 'true'`. A gate that already wrote `'false'` before its step failed still skips the gated jobs.
+Not covered: a cancelled run, a workflow that never starts, and jobs gated on `is-bottom == 'true'` or `is-top == 'true'`. A cancelled run reports its gated jobs as Cancelled, which does not pass a required check, so the PR stays blocked until a new run (tested live). A gate that already wrote `'false'` before its step failed still skips the gated jobs.
 
 Requiring the `gate` job as a check is optional extra protection. A failed gate job then blocks the merge even if a gated job is not required. Before you require it:
 
