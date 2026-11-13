@@ -1,10 +1,36 @@
+import { DEFAULT_STACK_WAIT_SECONDS } from './decide.mjs'
+
 const DEFAULT_API = 'https://api.github.com'
 
 export const GITHUB_API_VERSION = '2026-03-10'
 export const FETCH_TIMEOUT_MS = 15_000
 
-/** Immediate fetch, then backoff. Total wait ~6s so `opened` can see the stack. */
-export const OPENED_RETRY_DELAYS_MS = [0, 1000, 2000, 3000]
+export const DEFAULT_STACK_WAIT_MS = DEFAULT_STACK_WAIT_SECONDS * 1000
+
+/** A budget up to this long (the ~6 s retry of 1.1.0) stays quiet when it runs out. */
+const SHORT_WAIT_MS = 6000
+
+/** A fetch near the deadline still gets this long, so it is not cut off at once. */
+export const MIN_WAIT_FETCH_TIMEOUT_MS = 2000
+
+/** During a wait, a fetch may not run past the deadline by more than the floor. */
+export function waitFetchTimeoutMs(remainingMs, timeoutMs = FETCH_TIMEOUT_MS) {
+  return Math.min(timeoutMs, Math.max(remainingMs, MIN_WAIT_FETCH_TIMEOUT_MS))
+}
+
+/** 0, 1, 2, 3 s, then every 5 s, until the delays add up to totalMs. */
+export function stackWaitDelays(totalMs) {
+  const delays = [0]
+  let waited = 0
+  let step = 0
+  while (waited < totalMs) {
+    const next = [1000, 2000, 3000][step++] ?? 5000
+    const delay = Math.min(next, totalMs - waited)
+    delays.push(delay)
+    waited += delay
+  }
+  return delays
+}
 
 /** Open PRs, from the start of the list, are remaining-bottom first. */
 export function remainingDepthFromStackPulls(pulls, prNumber) {
@@ -37,7 +63,10 @@ function tagError(err, fields) {
   return Object.assign(tagged, fields)
 }
 
-async function githubGet(url, { token, fetchImpl, timeoutMs = FETCH_TIMEOUT_MS }) {
+async function githubGet(
+  url,
+  { token, fetchImpl, timeoutMs = FETCH_TIMEOUT_MS, timeoutSignal = AbortSignal.timeout },
+) {
   let res
   try {
     res = await fetchImpl(url, {
@@ -48,7 +77,7 @@ async function githubGet(url, { token, fetchImpl, timeoutMs = FETCH_TIMEOUT_MS }
         'User-Agent': 'stack-ci-gate',
       },
       redirect: 'error',
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: timeoutSignal(timeoutMs),
     })
   } catch (err) {
     // A rejected fetch is a network error or the timeout, not an HTTP status.
@@ -62,6 +91,29 @@ async function githubGet(url, { token, fetchImpl, timeoutMs = FETCH_TIMEOUT_MS }
   return res.json()
 }
 
+/**
+ * gh stack submit opens PRs bottom-first, so a PR in a new stack has an open
+ * PR whose head is its base. 'none' means nothing can be stacked below this
+ * PR, so with bottom-n of 1 or more it runs either way. Any failure reports
+ * 'error', and the caller keeps waiting.
+ */
+async function findBaseHeadPr({ apiUrl, repo, pr, token, fetchImpl, timeoutMs, timeoutSignal }) {
+  const ref = pr?.base?.ref
+  const owner = pr?.base?.repo?.owner?.login || String(repo).split('/')[0]
+  if (!ref || !owner) return 'error'
+  const head = encodeURIComponent(`${owner}:${ref}`)
+  try {
+    const list = await githubGet(
+      `${apiUrl}/repos/${repo}/pulls?state=open&head=${head}&per_page=1`,
+      { token, fetchImpl, timeoutMs, timeoutSignal },
+    )
+    if (!Array.isArray(list)) return 'error'
+    return list.length === 0 ? 'none' : 'found'
+  } catch {
+    return 'error'
+  }
+}
+
 export async function fetchPullRequest({
   apiUrl = DEFAULT_API,
   repo,
@@ -69,11 +121,13 @@ export async function fetchPullRequest({
   token,
   fetchImpl = globalThis.fetch,
   timeoutMs = FETCH_TIMEOUT_MS,
+  timeoutSignal,
 }) {
   return githubGet(`${apiUrl}/repos/${repo}/pulls/${prNumber}`, {
     token,
     fetchImpl,
     timeoutMs,
+    timeoutSignal,
   })
 }
 
@@ -99,9 +153,31 @@ function shouldRetryForStack(eventAction) {
 /** A pull request number: digits only, no sign, no leading zero. */
 const PR_NUMBER_PATTERN = /^[1-9]\d*$/
 
+function isRetryable(err) {
+  return err?.network === true || err?.status === 429 || err?.status >= 500
+}
+
+/**
+ * With bottom-n of 1 or more, a PR into the default branch is standalone or
+ * the remaining bottom, and runs either way, so it does not wait. The fetched
+ * PR decides, so a pr-number override or a payload without
+ * repository.default_branch still takes the shortcut.
+ */
+function intoDefaultBranch(pr, defaultBranch, bottomN) {
+  if (!(bottomN >= 1)) return false
+  const base = pr?.base?.ref
+  const branch = pr?.base?.repo?.default_branch || defaultBranch
+  return Boolean(base && branch && base === branch)
+}
+
 /**
  * Event stack is missing on `opened` (PR is created, then stacked). Fetch the
- * PR resource, and retry briefly on opened/reopened. A pr_number override
+ * PR resource, and on opened/reopened poll for the stack until stackWaitMs of
+ * wall-clock time has passed, unless the base is the default branch. waitedMs
+ * is the time from the first fetch to the start of the last one;
+ * stackWaitTimedOut is true when a budget longer than the short retry ended
+ * without a stack. A 429, 5xx or network error mid-wait is retried while
+ * budget remains; a thrown error carries waitedMs. A pr_number override
  * always uses the API and ignores the triggering event's stack.
  * Labels come from that same pull request: the event payload when its stack
  * is used, otherwise the fetched body.
@@ -118,8 +194,13 @@ export async function resolvePull({
   apiUrl = DEFAULT_API,
   fetchImpl = globalThis.fetch,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  retryDelaysMs = OPENED_RETRY_DELAYS_MS,
+  now = Date.now,
+  retryDelaysMs,
+  defaultBranch = '',
+  stackWaitMs = DEFAULT_STACK_WAIT_MS,
+  bottomN = 1,
   timeoutMs = FETCH_TIMEOUT_MS,
+  timeoutSignal,
 }) {
   const override = String(prNumberOverride ?? '').trim()
   if (override && !PR_NUMBER_PATTERN.test(override)) {
@@ -168,22 +249,41 @@ export async function resolvePull({
     }
   }
 
-  const delays = shouldRetryForStack(eventAction) ? retryDelaysMs : [0]
+  const polls = shouldRetryForStack(eventAction)
+  const delays = !polls ? [0] : (retryDelaysMs ?? stackWaitDelays(stackWaitMs))
+  const budgetMs = polls ? delays.reduce((sum, ms) => sum + ms, 0) : 0
+  const start = now()
+  const deadline = start + budgetMs
   let lastPr = null
+  let waitedMs = 0
+  let fetchMs = 0
+  let baseHeadPr
   for (let i = 0; i < delays.length; i++) {
-    if (delays[i] > 0) await sleep(delays[i])
+    // The fetch time counts against the next sleep, so the wait stays in budget.
+    const pause = Math.min(Math.max(delays[i] - fetchMs, 0), Math.max(deadline - now(), 0))
+    if (i > 0 && pause > 0) await sleep(pause)
+    const fetchStart = now()
+    waitedMs = fetchStart - start
+    const lastAttempt = i === delays.length - 1 || fetchStart >= deadline
+    let pr
     try {
-      lastPr = await fetchPullRequest({
+      pr = await fetchPullRequest({
         apiUrl,
         repo,
         prNumber,
         token,
         fetchImpl,
-        timeoutMs,
+        timeoutMs: budgetMs > 0 ? waitFetchTimeoutMs(deadline - fetchStart, timeoutMs) : timeoutMs,
+        timeoutSignal,
       })
     } catch (err) {
-      throw tagError(err, { lookup: 'pull' })
+      const tagged = tagError(err, { lookup: 'pull', waitedMs, baseHeadPr })
+      if (lastAttempt || !isRetryable(tagged)) throw tagged
+      fetchMs = now() - fetchStart
+      continue
     }
+    fetchMs = now() - fetchStart
+    lastPr = pr
     const stack = normalizeStack(lastPr.stack)
     if (stack) {
       return {
@@ -192,8 +292,26 @@ export async function resolvePull({
         stack,
         labels: labelNamesFrom(lastPr.labels),
         source: 'api',
+        waitedMs,
+        baseHeadPr,
       }
     }
+    if (intoDefaultBranch(lastPr, defaultBranch, bottomN)) break
+    if (budgetMs > 0 && bottomN >= 1 && baseHeadPr === undefined) {
+      const lookupStart = now()
+      baseHeadPr = await findBaseHeadPr({
+        apiUrl,
+        repo,
+        pr: lastPr,
+        token,
+        fetchImpl,
+        timeoutMs: waitFetchTimeoutMs(deadline - lookupStart, timeoutMs),
+        timeoutSignal,
+      })
+      fetchMs += now() - lookupStart
+      if (baseHeadPr === 'none') break
+    }
+    if (fetchStart >= deadline) break
   }
 
   return {
@@ -202,6 +320,13 @@ export async function resolvePull({
     stack: null,
     labels: labelNamesFrom(lastPr?.labels),
     source: 'api',
+    waitedMs,
+    baseHeadPr,
+    stackWaitTimedOut:
+      polls &&
+      budgetMs > SHORT_WAIT_MS &&
+      baseHeadPr !== 'none' &&
+      !intoDefaultBranch(lastPr, defaultBranch, bottomN),
   }
 }
 
@@ -237,7 +362,10 @@ export async function resolveContext({
   apiUrl = DEFAULT_API,
   fetchImpl = globalThis.fetch,
   sleep,
+  now,
   retryDelaysMs,
+  defaultBranch,
+  stackWaitMs,
   timeoutMs = FETCH_TIMEOUT_MS,
   bottomN,
 }) {
@@ -253,7 +381,11 @@ export async function resolveContext({
     apiUrl,
     fetchImpl,
     sleep,
+    now,
     retryDelaysMs,
+    defaultBranch,
+    stackWaitMs,
+    bottomN,
     timeoutMs,
   })
 

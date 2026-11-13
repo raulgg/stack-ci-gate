@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { run } from './gate.mjs'
+import { run as runRaw } from './gate.mjs'
 
 function jsonResponse(body, status = 200) {
   return {
@@ -13,6 +13,15 @@ function jsonResponse(body, status = 200) {
     text: async () => JSON.stringify(body),
   }
 }
+
+/** Answers the base-head lookup (a PR below exists by default), so tests count only pull fetches. */
+function withBaseHead(fetchImpl, list = [{ number: 41 }]) {
+  return async (url, init) =>
+    String(url).includes('/pulls?') ? jsonResponse(list) : fetchImpl(url, init)
+}
+
+// Most tests are about the pull fetch; the base-head lookup has its own tests with runRaw.
+const run = (env, deps = {}) => runRaw(env, { ...deps, fetch: deps.fetch && withBaseHead(deps.fetch) })
 
 function parseOutputs(file) {
   const out = {}
@@ -1075,7 +1084,7 @@ test('error summary keeps the event action', async () => {
   const { env } = await runPull(
     dir,
     { action: 'opened', pull_request: { number: 42, base: { ref: 'feat/auth' }, stack: null } },
-    summaryEnv(dir),
+    summaryEnv(dir, { 'INPUT_STACK-WAIT-SECONDS': '0' }),
     async () => jsonResponse({}, 502),
   )
   const summary = readSummary(env)
@@ -1684,4 +1693,421 @@ test('pull_request_target skips mid-stack quietly and warns when it cannot decid
   assert.equal(degraded.warnings.length, 1)
   assert.match(degraded.warnings[0], /pull-requests: read/)
   assert.match(degraded.summary, /## Action needed/)
+})
+
+function openedEvent(dir, { baseRef, defaultBranch = 'main', extra = {} }) {
+  return writeEvent(dir, {
+    action: 'opened',
+    repository: { default_branch: defaultBranch },
+    pull_request: { number: 42, base: { ref: baseRef }, stack: null },
+    ...extra,
+  })
+}
+
+const WAIT_LINE = /Waited .* for a stack and found none/
+
+function gateClock() {
+  const state = { t: 1_000_000, sleeps: [] }
+  state.now = () => state.t
+  state.sleep = async (ms) => {
+    state.sleeps.push(ms)
+    state.t += ms
+  }
+  return state
+}
+
+test('opened into the default branch fetches once without waiting', async () => {
+  const dir = tempDir()
+  const env = baseEnv(dir, {
+    ...summaryEnv(dir),
+    GITHUB_EVENT_NAME: 'pull_request',
+    GITHUB_EVENT_PATH: openedEvent(dir, { baseRef: 'main' }),
+  })
+  const out = capture()
+  let calls = 0
+  const { result } = await run(env, {
+    log: out.log,
+    sleep: async () => {
+      throw new Error('should not sleep')
+    },
+    fetch: async () => {
+      calls += 1
+      return jsonResponse({ number: 42, base: { ref: 'main' }, stack: null })
+    },
+  })
+  assert.equal(calls, 1)
+  assert.equal(result.should_run, true)
+  assert.equal(result.degraded, undefined)
+  const trace = out.lines.log.find((line) => line.includes('gate-trace'))
+  assert.match(trace, / waited_ms=0 base_head_pr=/)
+  assert.ok(!out.lines.log.some((line) => WAIT_LINE.test(line)))
+  const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
+  assert.doesNotMatch(summary, /Waited for stack/)
+})
+
+test('opened into another base waits for the stack and skips mid-stack', async () => {
+  const dir = tempDir()
+  const env = baseEnv(dir, {
+    ...summaryEnv(dir),
+    GITHUB_EVENT_NAME: 'pull_request',
+    GITHUB_EVENT_PATH: openedEvent(dir, { baseRef: 'feat/auth' }),
+  })
+  const out = capture()
+  let pullCalls = 0
+  const clock = gateClock()
+  const { result } = await run(env, {
+    log: out.log,
+    sleep: clock.sleep,
+    now: clock.now,
+    fetch: async (url) => {
+      if (String(url).includes('/stacks/')) {
+        return jsonResponse({
+          pull_requests: [
+            { number: 41, state: 'open' },
+            { number: 42, state: 'open' },
+            { number: 43, state: 'open' },
+          ],
+        })
+      }
+      pullCalls += 1
+      return jsonResponse({
+        number: 42,
+        base: { ref: 'feat/auth' },
+        stack:
+          pullCalls >= 6
+            ? { number: 50, position: 2, size: 3, base: { ref: 'main' } }
+            : null,
+      })
+    },
+  })
+  assert.equal(result.should_run, false)
+  assert.deepEqual(clock.sleeps, [1000, 2000, 3000, 5000, 5000])
+  const trace = out.lines.log.find((line) => line.includes('gate-trace'))
+  assert.match(trace, /waited_ms=16000/)
+  assert.ok(!out.lines.log.some((line) => WAIT_LINE.test(line)))
+  const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
+  assert.match(summary, /\| Waited for stack \| 16 s \|/)
+})
+
+test('a long wait that ends without a stack logs one plain line and is not degraded', async () => {
+  const dir = tempDir()
+  const env = baseEnv(dir, {
+    ...summaryEnv(dir),
+    GITHUB_EVENT_NAME: 'pull_request',
+    GITHUB_EVENT_PATH: openedEvent(dir, { baseRef: 'release/2' }),
+  })
+  const out = capture()
+  const clock = gateClock()
+  const { result } = await run(env, {
+    log: out.log,
+    sleep: clock.sleep,
+    now: clock.now,
+    fetch: async () =>
+      jsonResponse({ number: 42, base: { ref: 'release/2' }, stack: null }),
+  })
+  assert.equal(result.should_run, true)
+  assert.equal(result.degraded, undefined)
+  assert.equal(result.reason, 'not in a stack; running CI')
+  const waitLines = out.lines.log.filter((line) => WAIT_LINE.test(line))
+  assert.equal(waitLines.length, 1)
+  assert.match(waitLines[0], /Waited 40 s/)
+  assert.match(waitLines[0], /stack-wait-seconds/)
+  assert.ok(!waitLines[0].startsWith('::'))
+  assert.deepEqual(out.lines.warn, [])
+  assert.deepEqual(out.lines.error, [])
+  const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8')
+  assert.match(summary, /\| Waited for stack \| 40 s \|/)
+  assert.doesNotMatch(summary, /Action needed|Stack lookup/)
+})
+
+test('a short wait that runs out stays quiet', async () => {
+  const dir = tempDir()
+  const env = baseEnv(dir, {
+    GITHUB_EVENT_NAME: 'pull_request',
+    GITHUB_EVENT_PATH: openedEvent(dir, { baseRef: 'feat/auth' }),
+    'INPUT_STACK-WAIT-SECONDS': '6',
+  })
+  const out = capture()
+  let calls = 0
+  const { result } = await run(env, {
+    log: out.log,
+    sleep: async () => {},
+    fetch: async () => {
+      calls += 1
+      return jsonResponse({ number: 42, base: { ref: 'feat/auth' }, stack: null })
+    },
+  })
+  assert.equal(calls, 4)
+  assert.equal(result.should_run, true)
+  assert.equal(result.degraded, undefined)
+  assert.ok(!out.lines.log.some((line) => WAIT_LINE.test(line)))
+  assert.deepEqual(out.lines.warn, [])
+  assert.deepEqual(out.lines.error, [])
+})
+
+test('stack-wait-seconds 0 fetches once', async () => {
+  const dir = tempDir()
+  const env = baseEnv(dir, {
+    GITHUB_EVENT_NAME: 'pull_request',
+    GITHUB_EVENT_PATH: openedEvent(dir, { baseRef: 'feat/auth' }),
+    'INPUT_STACK-WAIT-SECONDS': '0',
+  })
+  const out = capture()
+  let calls = 0
+  await run(env, {
+    log: out.log,
+    sleep: async () => {
+      throw new Error('should not sleep')
+    },
+    fetch: async () => {
+      calls += 1
+      return jsonResponse({ number: 42, base: { ref: 'feat/auth' }, stack: null })
+    },
+  })
+  assert.equal(calls, 1)
+  assert.ok(!out.lines.log.some((line) => WAIT_LINE.test(line)))
+})
+
+test('blank stack-wait-seconds uses 40', async () => {
+  const dir = tempDir()
+  const env = baseEnv(dir, {
+    GITHUB_EVENT_NAME: 'pull_request',
+    GITHUB_EVENT_PATH: openedEvent(dir, { baseRef: 'feat/auth' }),
+    'INPUT_STACK-WAIT-SECONDS': ' ',
+  })
+  const clock = gateClock()
+  await run(env, {
+    log: silent,
+    sleep: clock.sleep,
+    now: clock.now,
+    fetch: async () =>
+      jsonResponse({ number: 42, base: { ref: 'feat/auth' }, stack: null }),
+  })
+  assert.equal(clock.sleeps.reduce((a, b) => a + b, 0), 40_000)
+})
+
+test('invalid stack-wait-seconds fail-opens with an error annotation', async () => {
+  const dir = tempDir()
+  const env = baseEnv(dir, {
+    GITHUB_EVENT_NAME: 'pull_request',
+    GITHUB_EVENT_PATH: openedEvent(dir, { baseRef: 'feat/auth' }),
+    'INPUT_STACK-WAIT-SECONDS': '101',
+    ...summaryEnv(dir),
+  })
+  const out = capture()
+  const { exitCode, result, error } = await run(env, {
+    log: out.log,
+    fetch: async () => {
+      throw new Error('should not fetch')
+    },
+  })
+  assert.equal(exitCode, 0)
+  assert.equal(result.should_run, true)
+  assert.equal(result.degraded, true)
+  assert.match(result.reason, /^invalid input; running CI/)
+  assert.ok(error)
+  assert.equal(parseOutputs(env.GITHUB_OUTPUT)['should-run'], 'true')
+  assert.equal(out.lines.error.length, 1)
+  assert.match(out.lines.error[0], /^::error title=Stack CI Gate::stack-wait-seconds/)
+  assert.deepEqual(out.lines.warn, [])
+  const summary = readSummary(env)
+  assert.match(summary, /\| Stack source \| invalid-input \|/)
+  assert.match(summary, /## Action needed\n\nCI ran because the gate could not decide\. Check the input values on the gate step\./)
+  assert.doesNotMatch(summary, /Waited for stack/)
+})
+
+test('gate-trace lists change keys and never their values', async () => {
+  const dir = tempDir()
+  const event = writeEvent(dir, {
+    action: 'edited',
+    repository: { default_branch: 'main' },
+    changes: {
+      title: { from: 'secret-title-value' },
+      base: { ref: { from: 'feat/old' }, sha: { from: 'deadbeef' } },
+      'Bad-Key': { from: 'x' },
+      'x::warning': { from: 'y' },
+    },
+    pull_request: {
+      number: 12,
+      base: { ref: 'feat/auth' },
+      stack: { number: 50, position: 2, size: 3, base: { ref: 'main' } },
+    },
+  })
+  const env = baseEnv(dir, {
+    GITHUB_EVENT_NAME: 'pull_request',
+    GITHUB_EVENT_PATH: event,
+  })
+  const out = capture()
+  await run(env, {
+    log: out.log,
+    fetch: async () =>
+      jsonResponse({
+        pull_requests: [
+          { number: 11, state: 'open' },
+          { number: 12, state: 'open' },
+          { number: 13, state: 'open' },
+        ],
+      }),
+  })
+  const trace = out.lines.log.find((line) => line.includes('gate-trace'))
+  assert.match(trace, / changes=base,title /)
+  assert.match(trace, / waited_ms=0 base_head_pr=/)
+  assert.doesNotMatch(trace, /secret-title-value|feat\/old|deadbeef|Bad-Key|warning/)
+})
+
+function openedRun(dir, { baseRef, defaultBranch = 'main', envExtra = {}, extra = {}, fetch }) {
+  const env = baseEnv(dir, {
+    ...summaryEnv(dir),
+    GITHUB_EVENT_NAME: 'pull_request',
+    GITHUB_EVENT_PATH: openedEvent(dir, { baseRef, defaultBranch, extra }),
+    ...envExtra,
+  })
+  const out = capture()
+  const clock = gateClock()
+  return run(env, { log: out.log, sleep: clock.sleep, now: clock.now, fetch }).then((res) => ({
+    ...res,
+    env,
+    clock,
+    lines: out.lines,
+    trace: out.lines.log.find((line) => line.includes('gate-trace')),
+    summary: fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8'),
+  }))
+}
+
+function pullBody(base, stack = null) {
+  return jsonResponse({ number: 42, base: { ref: base }, stack })
+}
+
+test('opened into the default branch waits for the stack with bottom-n 0', async () => {
+  let calls = 0
+  const { result, clock } = await openedRun(tempDir(), {
+    baseRef: 'main',
+    envExtra: { 'INPUT_BOTTOM-N': '0', 'INPUT_RUN-TOP': 'true' },
+    fetch: async () => {
+      calls += 1
+      return pullBody('main', calls >= 3 ? { number: 50, position: 1, size: 3, base: { ref: 'main' } } : null)
+    },
+  })
+  assert.equal(calls, 3)
+  assert.deepEqual(clock.sleeps, [1000, 2000])
+  assert.equal(result.should_run, false)
+})
+
+for (const [base, calls] of [
+  ['develop', 1],
+  ['main', 11],
+]) {
+  test(`default branch develop: opened into ${base} fetches ${calls} time(s)`, async () => {
+    let fetches = 0
+    const { result, trace } = await openedRun(tempDir(), {
+      baseRef: base,
+      defaultBranch: 'develop',
+      fetch: async () => {
+        fetches += 1
+        return pullBody(base)
+      },
+    })
+    assert.equal(fetches, calls)
+    assert.equal(result.should_run, true)
+    assert.match(trace, base === 'develop' ? / waited_ms=0 base_head_pr=/ : / waited_ms=40000 base_head_pr=/)
+  })
+}
+
+test('a pr-number override on opened stops once the fetched PR targets the default branch', async () => {
+  const urls = []
+  const { result } = await openedRun(tempDir(), {
+    baseRef: 'feat/other',
+    envExtra: { 'INPUT_PR-NUMBER': '7' },
+    fetch: async (url) => {
+      urls.push(url)
+      return jsonResponse({
+        number: 7,
+        base: { ref: 'main', repo: { default_branch: 'main' } },
+        stack: null,
+      })
+    },
+  })
+  assert.equal(urls.length, 1)
+  assert.match(urls[0], /\/pulls\/7$/)
+  assert.equal(result.should_run, true)
+})
+
+test('a 502 mid-wait keeps polling and the PR still skips mid-stack', async () => {
+  let calls = 0
+  const { result, lines, trace } = await openedRun(tempDir(), {
+    baseRef: 'feat/auth',
+    fetch: async () => {
+      calls += 1
+      if (calls === 2) return jsonResponse({ message: 'bad gateway' }, 502)
+      return pullBody(
+        'feat/auth',
+        calls >= 4 ? { number: 50, position: 2, size: 3, base: { ref: 'main' } } : null,
+      )
+    },
+  })
+  assert.equal(calls, 4)
+  assert.equal(result.should_run, false)
+  assert.deepEqual(lines.warn, [])
+  assert.match(trace, / waited_ms=6000 base_head_pr=/)
+})
+
+test('an error mid-wait keeps the action and the real wait in gate-trace and the summary', async () => {
+  let calls = 0
+  const { result, lines, trace, summary } = await openedRun(tempDir(), {
+    baseRef: 'feat/auth',
+    fetch: async () => {
+      calls += 1
+      if (calls === 3) return jsonResponse({ message: 'nope' }, 403)
+      return pullBody('feat/auth')
+    },
+  })
+  assert.equal(calls, 3)
+  assert.equal(result.should_run, true)
+  assert.equal(result.degraded, true)
+  assert.equal(lines.warn.length, 1)
+  assert.match(trace, /^gate-trace event=pull_request action=opened source=error /)
+  assert.match(trace, / waited_ms=3000 base_head_pr=/)
+  assert.match(summary, /\| Waited for stack \| 3 s \|/)
+  assert.match(summary, /\| Event \| pull_request opened \|/)
+})
+
+test('a timeout on the last poll fails open with the full wait', async () => {
+  const { result, trace } = await openedRun(tempDir(), {
+    baseRef: 'feat/auth',
+    envExtra: { 'INPUT_STACK-WAIT-SECONDS': '6' },
+    fetch: async () => {
+      throw new Error('The operation was aborted due to timeout')
+    },
+  })
+  assert.equal(result.should_run, true)
+  assert.equal(result.degraded, true)
+  assert.match(trace, / waited_ms=6000 base_head_pr=/)
+})
+
+test('a standalone PR into another branch decides at once and traces base_head_pr=none', async () => {
+  const dir = tempDir()
+  const env = baseEnv(dir, {
+    ...summaryEnv(dir),
+    GITHUB_EVENT_NAME: 'pull_request',
+    GITHUB_EVENT_PATH: openedEvent(dir, { baseRef: 'develop' }),
+  })
+  const out = capture()
+  let pullCalls = 0
+  const { result } = await runRaw(env, {
+    log: out.log,
+    sleep: async () => {
+      throw new Error('should not sleep')
+    },
+    fetch: async (url) => {
+      if (String(url).includes('/pulls?')) return jsonResponse([])
+      pullCalls += 1
+      return jsonResponse({ number: 42, base: { ref: 'develop' }, stack: null })
+    },
+  })
+  assert.equal(pullCalls, 1)
+  assert.equal(result.should_run, true)
+  const trace = out.lines.log.find((line) => line.includes('gate-trace'))
+  assert.match(trace, / waited_ms=0 base_head_pr=none$/)
+  assert.ok(!out.lines.log.some((line) => /^Waited /.test(line)))
+  assert.doesNotMatch(fs.readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8'), /Waited for stack/)
 })

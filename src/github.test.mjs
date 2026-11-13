@@ -3,8 +3,12 @@ import { test } from 'node:test'
 import {
   GITHUB_API_VERSION,
   remainingDepthFromStackPulls,
-  resolveContext,
-  resolvePull,
+  resolveContext as resolveContextRaw,
+  FETCH_TIMEOUT_MS,
+  MIN_WAIT_FETCH_TIMEOUT_MS,
+  resolvePull as resolvePullRaw,
+  stackWaitDelays,
+  waitFetchTimeoutMs,
 } from './github.mjs'
 
 function jsonResponse(body, status = 200) {
@@ -15,6 +19,18 @@ function jsonResponse(body, status = 200) {
     text: async () => JSON.stringify(body),
   }
 }
+
+/** Answers the base-head lookup (a PR below exists by default), so tests count only pull fetches. */
+function withBaseHead(fetchImpl, list = [{ number: 41 }]) {
+  return async (url, init) =>
+    String(url).includes('/pulls?') ? jsonResponse(list) : fetchImpl(url, init)
+}
+
+// Most tests are about the pull fetch; the base-head lookup has its own tests with resolvePullRaw.
+const resolvePull = (opts) =>
+  resolvePullRaw({ ...opts, fetchImpl: opts.fetchImpl && withBaseHead(opts.fetchImpl) })
+const resolveContext = (opts) =>
+  resolveContextRaw({ ...opts, fetchImpl: opts.fetchImpl && withBaseHead(opts.fetchImpl) })
 
 const middleStack = {
   number: 50,
@@ -81,7 +97,7 @@ test('opened with no event stack uses API stack (middle → caller will skip)', 
 
 test('opened retries until stack appears', async () => {
   let calls = 0
-  const sleeps = []
+  const clock = fakeClock()
   const resolved = await resolvePull({
     eventAction: 'opened',
     eventStack: null,
@@ -90,9 +106,8 @@ test('opened retries until stack appears', async () => {
     repo: 'octo/hello',
     token: 't',
     retryDelaysMs: [0, 10, 20],
-    sleep: async (ms) => {
-      sleeps.push(ms)
-    },
+    sleep: clock.sleep,
+    now: clock.now,
     fetchImpl: async () => {
       calls += 1
       if (calls < 3) {
@@ -110,7 +125,7 @@ test('opened retries until stack appears', async () => {
     },
   })
   assert.equal(calls, 3)
-  assert.deepEqual(sleeps, [10, 20])
+  assert.deepEqual(clock.sleeps, [10, 20])
   assert.equal(resolved.stack.position, 2)
 })
 
@@ -611,4 +626,538 @@ test('API failure propagates so the gate can fail open', async () => {
       return true
     },
   )
+})
+
+test('stack wait schedule is 0, 1, 2, 3 s, then every 5 s, last step shortened', () => {
+  assert.deepEqual(
+    stackWaitDelays(40_000),
+    [0, 1000, 2000, 3000, 5000, 5000, 5000, 5000, 5000, 5000, 4000],
+  )
+  assert.equal(stackWaitDelays(40_000).reduce((a, b) => a + b, 0), 40_000)
+  assert.deepEqual(stackWaitDelays(6000), [0, 1000, 2000, 3000])
+  assert.deepEqual(stackWaitDelays(2000), [0, 1000, 1000])
+  assert.deepEqual(stackWaitDelays(0), [0])
+})
+
+function countingPullFetch(stackOnCall, body = {}) {
+  const state = { calls: 0 }
+  state.fetchImpl = async () => {
+    state.calls += 1
+    return jsonResponse({
+      number: 42,
+      base: { ref: 'feat/auth' },
+      stack: state.calls >= stackOnCall ? middleStack : null,
+      ...body,
+    })
+  }
+  return state
+}
+
+/** A fake clock: sleep advances now, and fetches can take time too. */
+function fakeClock() {
+  const state = { t: 1_000_000, sleeps: [] }
+  state.now = () => state.t
+  state.sleep = async (ms) => {
+    state.sleeps.push(ms)
+    state.t += ms
+  }
+  return state
+}
+
+const openedPull = {
+  eventAction: 'opened',
+  eventStack: null,
+  eventPrNumber: 42,
+  eventPrBaseRef: 'feat/auth',
+  prNumberOverride: '',
+  repo: 'octo/hello',
+  token: 't',
+  defaultBranch: 'main',
+}
+
+test('opened into the default branch fetches once and does not sleep', async () => {
+  const pulls = countingPullFetch(Infinity, { base: { ref: 'main' } })
+  const resolved = await resolvePull({
+    ...openedPull,
+    eventPrBaseRef: 'main',
+    fetchImpl: pulls.fetchImpl,
+    sleep: async () => {
+      throw new Error('should not sleep')
+    },
+  })
+  assert.equal(pulls.calls, 1)
+  assert.equal(resolved.stack, null)
+  assert.equal(resolved.waitedMs, 0)
+  assert.equal(resolved.stackWaitTimedOut, false)
+})
+
+test('opened into the default branch still waits with bottom-n 0', async () => {
+  const pulls = countingPullFetch(3, { base: { ref: 'main' } })
+  const clock = fakeClock()
+  const resolved = await resolvePull({
+    ...openedPull,
+    eventPrBaseRef: 'main',
+    bottomN: 0,
+    fetchImpl: pulls.fetchImpl,
+    sleep: clock.sleep,
+    now: clock.now,
+  })
+  assert.equal(pulls.calls, 3)
+  assert.deepEqual(clock.sleeps, [1000, 2000])
+  assert.equal(resolved.stack.position, 2)
+})
+
+test('the default branch comes from the fetched PR when the payload lacks it', async () => {
+  const pulls = countingPullFetch(Infinity, {
+    base: { ref: 'develop', repo: { default_branch: 'develop' } },
+  })
+  const resolved = await resolvePull({
+    ...openedPull,
+    eventPrBaseRef: 'develop',
+    defaultBranch: '',
+    fetchImpl: pulls.fetchImpl,
+    sleep: async () => {
+      throw new Error('should not sleep')
+    },
+  })
+  assert.equal(pulls.calls, 1)
+  assert.equal(resolved.stackWaitTimedOut, false)
+})
+
+for (const [base, calls] of [
+  ['develop', 1],
+  ['main', 11],
+]) {
+  test(`with default branch develop, opened into ${base} fetches ${calls} time(s)`, async () => {
+    const pulls = countingPullFetch(Infinity, {
+      base: { ref: base, repo: { default_branch: 'develop' } },
+    })
+    const clock = fakeClock()
+    const resolved = await resolvePull({
+      ...openedPull,
+      eventPrBaseRef: base,
+      defaultBranch: 'develop',
+      fetchImpl: pulls.fetchImpl,
+      sleep: clock.sleep,
+      now: clock.now,
+    })
+    assert.equal(pulls.calls, calls)
+    assert.equal(resolved.stackWaitTimedOut, base === 'main')
+  })
+}
+
+test('opened into another base waits until the stack appears', async () => {
+  const pulls = countingPullFetch(7)
+  const clock = fakeClock()
+  const resolved = await resolvePull({
+    ...openedPull,
+    fetchImpl: pulls.fetchImpl,
+    sleep: clock.sleep,
+    now: clock.now,
+  })
+  assert.equal(pulls.calls, 7)
+  assert.deepEqual(clock.sleeps, [1000, 2000, 3000, 5000, 5000, 5000])
+  assert.equal(resolved.stack.position, 2)
+  assert.equal(resolved.waitedMs, 21_000)
+  assert.equal(resolved.stackWaitTimedOut, undefined)
+})
+
+test('opened into another base gives up after the full budget', async () => {
+  const pulls = countingPullFetch(Infinity)
+  const clock = fakeClock()
+  const resolved = await resolvePull({
+    ...openedPull,
+    eventAction: 'reopened',
+    fetchImpl: pulls.fetchImpl,
+    sleep: clock.sleep,
+    now: clock.now,
+  })
+  assert.equal(pulls.calls, 11)
+  assert.equal(clock.sleeps.reduce((a, b) => a + b, 0), 40_000)
+  assert.equal(resolved.stack, null)
+  assert.equal(resolved.waitedMs, 40_000)
+  assert.equal(resolved.stackWaitTimedOut, true)
+})
+
+test('slow fetches shorten the next sleep so the wait stays within budget', async () => {
+  const clock = fakeClock()
+  let calls = 0
+  const resolved = await resolvePull({
+    ...openedPull,
+    fetchImpl: async () => {
+      calls += 1
+      clock.t += 1500
+      return jsonResponse({ number: 42, base: { ref: 'feat/auth' }, stack: null })
+    },
+    sleep: clock.sleep,
+    now: clock.now,
+  })
+  const start = 1_000_000
+  // Each sleep loses the 1.5 s the previous fetch took; the last fetch starts by the deadline.
+  assert.deepEqual(clock.sleeps.slice(0, 4), [500, 1500, 3500, 3500])
+  assert.equal(calls, 11)
+  assert.equal(resolved.waitedMs, 40_000)
+  // Without the shortening this would be 11 fetches of 1.5 s on top of 40 s of sleep.
+  assert.equal(clock.t - start, 40_000 + 1500)
+  assert.equal(resolved.stackWaitTimedOut, true)
+})
+
+test('a 502 mid-wait keeps polling and the stack still counts', async () => {
+  const clock = fakeClock()
+  let calls = 0
+  const resolved = await resolvePull({
+    ...openedPull,
+    fetchImpl: async () => {
+      calls += 1
+      if (calls === 2) return jsonResponse({ message: 'bad gateway' }, 502)
+      if (calls === 3) throw new Error('The operation was aborted due to timeout')
+      return jsonResponse({
+        number: 42,
+        base: { ref: 'feat/auth' },
+        stack: calls >= 4 ? middleStack : null,
+      })
+    },
+    sleep: clock.sleep,
+    now: clock.now,
+  })
+  assert.equal(calls, 4)
+  assert.equal(resolved.stack.position, 2)
+  assert.equal(resolved.waitedMs, 6000)
+})
+
+for (const status of [401, 403, 404]) {
+  test(`a ${status} mid-wait throws at once with the time waited`, async () => {
+    const clock = fakeClock()
+    let calls = 0
+    await assert.rejects(
+      resolvePull({
+        ...openedPull,
+        fetchImpl: async () => {
+          calls += 1
+          if (calls === 3) return jsonResponse({}, status)
+          return jsonResponse({ number: 42, base: { ref: 'feat/auth' }, stack: null })
+        },
+        sleep: clock.sleep,
+        now: clock.now,
+      }),
+      (err) => err.status === status && err.lookup === 'pull' && err.waitedMs === 3000,
+    )
+    assert.equal(calls, 3)
+  })
+}
+
+test('a 5xx on the last attempt throws with the full wait', async () => {
+  const clock = fakeClock()
+  let calls = 0
+  await assert.rejects(
+    resolvePull({
+      ...openedPull,
+      stackWaitMs: 6000,
+      fetchImpl: async () => {
+        calls += 1
+        return jsonResponse({}, 503)
+      },
+      sleep: clock.sleep,
+      now: clock.now,
+    }),
+    (err) => err.status === 503 && err.waitedMs === 6000,
+  )
+  assert.equal(calls, 4)
+})
+
+test('a 5xx without a wait throws at once', async () => {
+  let calls = 0
+  await assert.rejects(
+    resolvePull({
+      ...openedPull,
+      eventAction: 'synchronize',
+      fetchImpl: async () => {
+        calls += 1
+        return jsonResponse({}, 502)
+      },
+    }),
+    (err) => err.status === 502 && err.waitedMs === 0,
+  )
+  assert.equal(calls, 1)
+})
+
+test('unknown default branch still waits for the stack', async () => {
+  const pulls = countingPullFetch(2, { base: { ref: 'main' } })
+  const clock = fakeClock()
+  const resolved = await resolvePull({
+    ...openedPull,
+    eventPrBaseRef: 'main',
+    defaultBranch: '',
+    fetchImpl: pulls.fetchImpl,
+    sleep: clock.sleep,
+    now: clock.now,
+  })
+  assert.equal(pulls.calls, 2)
+  assert.equal(resolved.waitedMs, 1000)
+})
+
+test('stack wait of 0 fetches once', async () => {
+  const pulls = countingPullFetch(Infinity)
+  const resolved = await resolvePull({
+    ...openedPull,
+    stackWaitMs: 0,
+    fetchImpl: pulls.fetchImpl,
+    sleep: async () => {
+      throw new Error('should not sleep')
+    },
+  })
+  assert.equal(pulls.calls, 1)
+  assert.equal(resolved.waitedMs, 0)
+  assert.equal(resolved.stackWaitTimedOut, false)
+})
+
+test('a 6 s wait that runs out is not a long wait', async () => {
+  const pulls = countingPullFetch(Infinity)
+  const clock = fakeClock()
+  const resolved = await resolvePull({
+    ...openedPull,
+    stackWaitMs: 6000,
+    fetchImpl: pulls.fetchImpl,
+    sleep: clock.sleep,
+    now: clock.now,
+  })
+  assert.equal(pulls.calls, 4)
+  assert.equal(resolved.waitedMs, 6000)
+  assert.equal(resolved.stackWaitTimedOut, false)
+})
+
+test('a pr-number override into the default branch stops after the first fetch', async () => {
+  const pulls = countingPullFetch(3, { base: { ref: 'main' } })
+  const resolved = await resolvePull({
+    ...openedPull,
+    eventPrNumber: 7,
+    eventPrBaseRef: 'feat/other',
+    prNumberOverride: '42',
+    fetchImpl: pulls.fetchImpl,
+    sleep: async () => {
+      throw new Error('should not sleep')
+    },
+  })
+  assert.equal(pulls.calls, 1)
+  assert.equal(resolved.stack, null)
+})
+
+test('a pr-number override into another base waits for the stack', async () => {
+  const pulls = countingPullFetch(3)
+  const clock = fakeClock()
+  const resolved = await resolvePull({
+    ...openedPull,
+    eventPrNumber: 7,
+    eventPrBaseRef: 'main',
+    prNumberOverride: '42',
+    fetchImpl: pulls.fetchImpl,
+    sleep: clock.sleep,
+    now: clock.now,
+  })
+  assert.equal(pulls.calls, 3)
+  assert.equal(resolved.stack.position, 2)
+})
+
+test('a wait fetch gets the time left before the deadline, with a floor', () => {
+  assert.equal(waitFetchTimeoutMs(40_000), FETCH_TIMEOUT_MS)
+  assert.equal(waitFetchTimeoutMs(9_000), 9_000)
+  assert.equal(waitFetchTimeoutMs(500), MIN_WAIT_FETCH_TIMEOUT_MS)
+  assert.equal(waitFetchTimeoutMs(-3_000), MIN_WAIT_FETCH_TIMEOUT_MS)
+  assert.equal(waitFetchTimeoutMs(9_000, 4_000), 4_000)
+})
+
+/** Fetches that hang until their timeout, on a fake clock. */
+function hangingPullFetch(clock) {
+  const state = { timeouts: [] }
+  state.timeoutSignal = (ms) => {
+    state.timeouts.push(ms)
+    return new AbortController().signal
+  }
+  state.fetchImpl = async () => {
+    clock.t += state.timeouts.at(-1)
+    throw new Error('The operation was aborted due to timeout')
+  }
+  return state
+}
+
+test('a hanging API cannot push the wait past the deadline plus the floor', async () => {
+  const clock = fakeClock()
+  const pulls = hangingPullFetch(clock)
+  const start = clock.t
+  await assert.rejects(
+    resolvePull({
+      ...openedPull,
+      stackWaitMs: 40_000,
+      fetchImpl: pulls.fetchImpl,
+      timeoutSignal: pulls.timeoutSignal,
+      sleep: clock.sleep,
+      now: clock.now,
+    }),
+    (err) => err.network === true && err.lookup === 'pull',
+  )
+  assert.ok(clock.t - start <= 40_000 + MIN_WAIT_FETCH_TIMEOUT_MS, `took ${clock.t - start} ms`)
+  assert.equal(pulls.timeouts[0], FETCH_TIMEOUT_MS)
+  assert.ok(pulls.timeouts.every((ms) => ms <= FETCH_TIMEOUT_MS))
+  assert.ok(pulls.timeouts.at(-1) < FETCH_TIMEOUT_MS)
+})
+
+test('a slow fetch near the deadline gets a shortened timeout', async () => {
+  const clock = fakeClock()
+  const timeouts = []
+  let calls = 0
+  const resolved = await resolvePull({
+    ...openedPull,
+    stackWaitMs: 10_000,
+    timeoutSignal: (ms) => {
+      timeouts.push(ms)
+      return new AbortController().signal
+    },
+    fetchImpl: async () => {
+      calls += 1
+      clock.t += 1_500
+      return jsonResponse({ number: 42, base: { ref: 'feat/auth' }, stack: null })
+    },
+    sleep: clock.sleep,
+    now: clock.now,
+  })
+  assert.equal(resolved.stack, null)
+  assert.ok(timeouts.length > 1)
+  assert.ok(timeouts.at(-1) < 10_000, `last timeout ${timeouts.at(-1)} ms`)
+  assert.ok(timeouts.every((ms) => ms >= MIN_WAIT_FETCH_TIMEOUT_MS))
+})
+
+test('stack-wait-seconds 0 keeps the full fetch timeout', async () => {
+  const timeouts = []
+  await resolvePull({
+    ...openedPull,
+    stackWaitMs: 0,
+    timeoutSignal: (ms) => {
+      timeouts.push(ms)
+      return new AbortController().signal
+    },
+    fetchImpl: async () => jsonResponse({ number: 42, base: { ref: 'feat/auth' }, stack: null }),
+    sleep: async () => {
+      throw new Error('should not sleep')
+    },
+  })
+  assert.deepEqual(timeouts, [FETCH_TIMEOUT_MS])
+})
+
+/** A pull fetch plus a base-head lookup that answers with `lookup`. */
+function baseHeadFetch({ lookup, stackOnCall = Infinity, body = {} }) {
+  const state = { pullCalls: 0, lookups: [] }
+  state.fetchImpl = async (url) => {
+    if (String(url).includes('/pulls?')) {
+      state.lookups.push(String(url))
+      return lookup()
+    }
+    state.pullCalls += 1
+    return jsonResponse({
+      number: 42,
+      base: { ref: 'feat/auth', repo: { owner: { login: 'octo' } } },
+      stack: state.pullCalls >= stackOnCall ? middleStack : null,
+      ...body,
+    })
+  }
+  return state
+}
+
+test('no open PR whose head is the base: decide at once without waiting', async () => {
+  const pulls = baseHeadFetch({ lookup: () => jsonResponse([]) })
+  const resolved = await resolvePullRaw({
+    ...openedPull,
+    fetchImpl: pulls.fetchImpl,
+    sleep: async () => {
+      throw new Error('should not sleep')
+    },
+  })
+  assert.equal(pulls.pullCalls, 1)
+  assert.equal(pulls.lookups.length, 1)
+  assert.match(pulls.lookups[0], /\/repos\/octo\/hello\/pulls\?state=open&head=octo%3Afeat%2Fauth&per_page=1$/)
+  assert.equal(resolved.baseHeadPr, 'none')
+  assert.equal(resolved.waitedMs, 0)
+  assert.equal(resolved.stack, null)
+  assert.equal(resolved.stackWaitTimedOut, false)
+})
+
+test('an open PR whose head is the base: keep waiting for the stack', async () => {
+  const pulls = baseHeadFetch({ lookup: () => jsonResponse([{ number: 41 }]), stackOnCall: 3 })
+  const clock = fakeClock()
+  const resolved = await resolvePullRaw({
+    ...openedPull,
+    fetchImpl: pulls.fetchImpl,
+    sleep: clock.sleep,
+    now: clock.now,
+  })
+  assert.equal(pulls.lookups.length, 1)
+  assert.equal(pulls.pullCalls, 3)
+  assert.equal(resolved.baseHeadPr, 'found')
+  assert.equal(resolved.stack.position, 2)
+})
+
+for (const [name, lookup] of [
+  ['403', () => jsonResponse({ message: 'Forbidden' }, 403)],
+  ['500', () => jsonResponse({ message: 'oops' }, 500)],
+  ['network error', () => Promise.reject(new TypeError('fetch failed'))],
+  ['non-array body', () => jsonResponse({ number: 41 })],
+]) {
+  test(`a base-head lookup ${name} keeps waiting`, async () => {
+    const pulls = baseHeadFetch({ lookup, stackOnCall: 3 })
+    const clock = fakeClock()
+    const resolved = await resolvePullRaw({
+      ...openedPull,
+      fetchImpl: pulls.fetchImpl,
+      sleep: clock.sleep,
+      now: clock.now,
+    })
+    assert.equal(pulls.lookups.length, 1)
+    assert.equal(pulls.pullCalls, 3)
+    assert.equal(resolved.baseHeadPr, 'error')
+    assert.equal(resolved.stack.position, 2)
+  })
+}
+
+test('the default-branch shortcut makes no base-head lookup', async () => {
+  const pulls = baseHeadFetch({
+    lookup: () => jsonResponse([]),
+    body: { base: { ref: 'main' } },
+  })
+  const resolved = await resolvePullRaw({ ...openedPull, eventPrBaseRef: 'main', fetchImpl: pulls.fetchImpl })
+  assert.equal(pulls.pullCalls, 1)
+  assert.equal(pulls.lookups.length, 0)
+  assert.equal(resolved.baseHeadPr, undefined)
+})
+
+test('bottom-n 0 makes no base-head lookup and still waits', async () => {
+  const pulls = baseHeadFetch({ lookup: () => jsonResponse([]), stackOnCall: 3 })
+  const clock = fakeClock()
+  const resolved = await resolvePullRaw({
+    ...openedPull,
+    bottomN: 0,
+    fetchImpl: pulls.fetchImpl,
+    sleep: clock.sleep,
+    now: clock.now,
+  })
+  assert.equal(pulls.lookups.length, 0)
+  assert.equal(pulls.pullCalls, 3)
+  assert.equal(resolved.stack.position, 2)
+})
+
+test('a pr-number override looks up the fetched PR base', async () => {
+  const pulls = baseHeadFetch({
+    lookup: () => jsonResponse([]),
+    body: { number: 7, base: { ref: 'release/2', repo: { owner: { login: 'octo' } } } },
+  })
+  const resolved = await resolvePullRaw({
+    ...openedPull,
+    prNumberOverride: '7',
+    fetchImpl: pulls.fetchImpl,
+    sleep: async () => {
+      throw new Error('should not sleep')
+    },
+  })
+  assert.equal(pulls.pullCalls, 1)
+  assert.match(pulls.lookups[0], /head=octo%3Arelease%2F2&/)
+  assert.equal(resolved.baseHeadPr, 'none')
+  assert.equal(resolved.waitedMs, 0)
 })
