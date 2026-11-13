@@ -21,6 +21,7 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 - With `bottom-n` of 1 or more, a PR whose base branch is not the head of any open PR no longer waits on `opened` and `reopened`, because nothing can be stacked below it. With `bottom-n: 0` every PR still waits, because the bottom PR of a new stack should skip and looks like a standalone PR until the stack is linked.
 - On `opened` and `reopened`, any other PR that is not in a stack yet, such as one in a chain of PRs outside a stack, now waits up to `stack-wait-seconds` (default 40 s) instead of about 6 s; set `stack-wait-seconds: 6` to restore the 1.1.0 behaviour.
 - The recommended workflow recipe runs gated jobs when the gate fails. Update existing workflows: the old `needs: gate` with `should-run == 'true'` recipe still works, but it skips gated jobs when the gate fails, and a skipped required check does not block merging. See [What fails open](README.md#what-fails-open).
+- The recommended `pull_request` types are now `opened`, `synchronize`, `reopened`, and `edited`. `labeled` is opt-in for the force-run label, and `stacked` is optional. Workflows with the old six types keep working; they just run more. The README also notes that a `workflow_dispatch` run [does not satisfy a required check](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#checks-from-some-workflow-jobs-are-not-evaluated).
 
 ### Fixed
 

@@ -40,7 +40,7 @@ A pull request workflow has `pull_request` in `on`: a key under `on`, a bare `on
 
 A pull request workflow is gated when a step uses `raulgg/stack-ci-gate` at any ref and another job or step compares that job's `should-run` to `'true'` with `==` or to `'false'` with `!=`. When the root `action.yml` has `name: Stack CI Gate`, `uses: ./` counts as this action. Treat a comment as ungated, and treat a gate job the same way when no other job or step checks it.
 
-A gated pull request workflow is outdated when any job or step compares `should-run` with `== 'true'`, when the gate step has no `continue-on-error: true`, when a job that lists the gate job in `needs` has no job-level `if`, or one without `!cancelled()`, or when the gate job or a job that lists it in `needs` has a job-level `if` that filters on the event, such as `github.event.action`, `github.event.changes`, `github.event.label`, or `github.event.pull_request.draft`. In a one-job layout, where the gate is a step in the job it gates, only the first two apply, plus an event filter on that job.
+A gated pull request workflow is outdated when any job or step compares `should-run` with `== 'true'`, when the gate step has no `continue-on-error: true`, when its `pull_request` trigger does not include `edited`, when a job that lists the gate job in `needs` has no job-level `if`, or one without `!cancelled()`, or when the gate job or a job that lists it in `needs` has a job-level `if` that filters on the event, such as `github.event.action`, `github.event.changes`, `github.event.label`, or `github.event.pull_request.draft`. In a one-job layout, where the gate is a step in the job it gates, only the first three apply, plus an event filter on that job.
 
 Mark each file as a gated pull request workflow, an outdated gated pull request workflow, an ungated pull request workflow, or neither. On Suggest, an outdated workflow counts as gated.
 
@@ -66,9 +66,13 @@ Suggest. Make the workflow edit this task asked for. If this conversation has al
 
 Asked and Rewrite run this on each pull request workflow they gate.
 
-If `pull_request` has no `types` list, set it to `opened`, `synchronize`, `reopened`, `edited`, `stacked`, and `labeled`. If it has a list, add any of those six that are missing. Keep every other trigger, type, branch filter, and path filter.
+If `pull_request` has no `types` list, set it to `opened`, `synchronize`, `reopened`, and `edited`. If it has a list, add any of those four that are missing. Keep every other trigger, type, branch filter, and path filter.
 
-`labeled` lets a `stack-ci:run` label force a mid-stack run without a push. Leave `labeled` out when this workflow will not use the force-run label.
+- `edited`: always add it. It gives a retarget a run when GitHub's cascade rebase does not follow, and covers manual base changes.
+- `labeled`: add it only when the user asks to force-run without a push, or the list already has it. It lets a `stack-ci:run` label force a mid-stack run.
+- `stacked`: add it only when the user asks. A PR that is not in a stack yet already runs in full on `opened`.
+
+Never filter these with an `if`, on a job or a step. A skipped required job replaces an earlier failure on the same commit. In the reply, say that every title or body edit, and every added label when `labeled` is listed, reruns every job in the workflow.
 
 Add this job when the file has no job that uses this action yet. When it already has one, keep it and add `continue-on-error: true` to its gate step. Keep its `with:` inputs, its ref and its other keys. The step id stays `gate`. When a job id `gate` already exists, name this job `stack-gate`. Use that id in `needs` and `if`.
 
@@ -90,13 +94,15 @@ A gate job you add matches that YAML; an existing one keeps its inputs and ref. 
 
 Look at recent Actions run durations and at what the steps do. Choose what skips on a mid-stack pull request. Gate work that takes long enough that a run on the bottom and the top is enough. Leave short checks on every layer, such as lint and format. Skip the whole job when nothing in it should run mid-stack. Skip a step when the rest of the job should still run.
 
+Only gated jobs need the gate job. Jobs that run on every layer keep their `needs` and `if` as they were, and start at once.
+
 On a gated job, append the gate job id to `needs` and keep the other dependencies. When `needs` is a single job, make it a list. Set `if: ${{ !cancelled() && needs.<gate-job>.outputs.should-run != 'false' }}`. `!cancelled()` runs the job when the gate job fails. If the gate job is skipped or fails, `should-run` is empty and the job runs. `!cancelled()` also runs the job when another job in its `needs` fails, so add `&& needs.<other>.result == 'success'` for each other job in `needs`. This checks direct needs only. If a job further up the chain can fail while a direct need still succeeds, add that job to `needs` and check it too.
 
 On a gated step, put `if: needs.<gate-job>.outputs.should-run != 'false'` on the step. Append the gate job id to the job's `needs` the same way, and give the job `if: ${{ !cancelled() }}` plus the same `needs.<other>.result == 'success'` checks.
 
 When the job already has an `if`, strip its `${{ }}` and replace each `should-run == 'true'` with `should-run != 'false'` in place. Then wrap the whole expression in parentheses and put `!cancelled() && ` and the `needs.<other>.result == 'success'` checks in front of it. Do not add a second `should-run` check. On a gated job whose `if` had no `should-run` comparison, put `needs.<gate-job>.outputs.should-run != 'false' && ` in front as well. When the expression already calls a status function such as `always()`, keep it and ask the user how a failed gate job should affect that job.
 
-Do not add a job-level `if` that filters on the event (title or body edits, labels, drafts) to the gate job or to a job that lists it in `needs`. When one is already there, flag it in the reply and tell the user why: a later run that skips a required job on the same commit replaces an earlier Failure, so a failing pull request can become mergeable. GitHub showed this live. Suggest removing that event's type from `on` instead.
+Do not add a job-level `if` that filters on the event (title or body edits, labels, drafts) to the gate job or to a job that lists it in `needs`. When one is already there, flag it in the reply and tell the user why: a later run that skips a required job on the same commit replaces an earlier Failure, so a failing pull request can become mergeable. GitHub showed this live. Suggest removing the filter. For `labeled` or a draft type, also suggest removing that type from `on`. Never suggest removing `edited`.
 
 In a one-job layout, put `continue-on-error: true` on the gate step and replace each `steps.gate.outputs.should-run == 'true'` with `steps.gate.outputs.should-run != 'false'`. Use the gate step's own `id`. Those steps need no status function.
 
@@ -106,8 +112,8 @@ Add the types, the gate job, and those `needs` and `if` lines. Leave every other
 
 You are done when each edited file meets all of these:
 
-- It has `opened`, `synchronize`, `reopened`, `edited`, and `stacked`.
-- It has `labeled` unless this workflow will not use the force-run label.
+- It has `opened`, `synchronize`, `reopened`, and `edited`.
+- It has `labeled` or `stacked` only when it already had them or the cases above apply.
 - It has one gate job with `continue-on-error: true` on the gate step. A gate job you added is in that shape.
 - No job or step compares `should-run` with `== 'true'`.
 - Each chosen job or step compares `should-run` with `!= 'false'`.
@@ -116,4 +122,4 @@ You are done when each edited file meets all of these:
 - Each gated job has `needs.<gate-job>.outputs.should-run != 'false'` in that `if`, and no second `should-run` check added next to it.
 - You added no job-level `if` that filters on the event.
 
-In the reply, flag each job-level event filter on the gate job or a job that lists it in `needs`, and why. Name what you gated, what still runs on every layer, and which gated checks a mid-stack pull request will report as Success without running. Say that the user can also require the gate job as a check, that required job names must be unique across workflows, and that a required gate stays Pending in a workflow with `paths:` filters, or in a merge queue repo whose workflow lacks `merge_group`.
+In the reply, flag each job-level event filter on the gate job or a job that lists it in `needs`, and why. Say that title and body edits rerun the workflow. Name what you gated, what still runs on every layer, and which gated checks a mid-stack pull request will report as Success without running. Say that the user can also require the gate job as a check, that required job names must be unique across workflows, and that a required gate stays Pending in a workflow with `paths:` filters, or in a merge queue repo whose workflow lacks `merge_group`.
