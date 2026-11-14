@@ -9,7 +9,7 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 - The gate step writes a job summary with the decision, the reason, and the stack position.
 - When CI runs only because the gate could not decide, the gate step adds a warning annotation and an `Action needed` job summary section with the cause and the fix.
 - An empty `github-token` warns only on a stacked pull request that needs the stack listing, so fork and Dependabot pull requests stay quiet.
-- `stack-wait-seconds` (default `40`, 0 to 100) sets how long `opened` and `reopened` wait for `gh stack submit` to link the stack. 40 covers a submit of about 11 PRs and 100 about 25. A separate gate job stays at 1 billed minute up to a wait of about 50 seconds; a longer wait bills more only on PRs that wait the full time.
+- `stack-wait-seconds` (default `40`, 0 to 100) sets how long `opened` and `reopened` wait for `gh stack submit` to link the stack. 40 covers a submit of about 11 PRs and 100 about 25. A separate gate job stays at 1 billed minute up to a wait of about 50 seconds; a longer wait makes it 2 billed minutes, only on PRs that wait the full time.
 - The job summary adds a `Waited for stack` row when the gate waited for the stack.
 
 ### Changed

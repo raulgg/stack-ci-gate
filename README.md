@@ -164,17 +164,18 @@ GitHub's default is `opened`, `synchronize`, `reopened`. Without `edited`, a rem
 - A PR into the default branch.
 - A PR whose base branch no open PR comes from, so nothing can be stacked below it. Checking this costs one API request.
 
+A stack opened top-first by hand also decides at once, so every PR in it runs CI on `opened`.
+
 The bottom PR of a new stack is usually one of these. Its `opened` run reports `is-stacked` as `'false'`, with empty `position` and `size`. Later events, such as `stacked`, report its place in the stack.
 
 **Full wait, then CI runs.** These PRs wait the full `stack-wait-seconds`, so their gated jobs start that much later:
 
-- A chain of PRs outside a GitHub stack.
-- A stack opened top-first by hand.
+- A chain of PRs outside a GitHub stack, opened bottom-first.
 - A PR into a long-lived branch that has its own open PR, such as `develop` with an open `develop` → `main` PR.
 
-**With `bottom-n: 0`, every PR waits.** The bottom PR should skip too, and on `opened` it looks just like a standalone PR. So a standalone PR waits the full time before it runs. The bottom PR of an N-PR submit waits longest, about 4.5 × N − 2.5 seconds, so 40 covers about 9 PRs.
+**With `bottom-n: 0`, every PR waits.** The bottom PR should skip too, and on `opened` it looks just like a standalone PR. So a standalone PR waits the full time before it runs. The bottom PR of an N-PR submit waits longest, about 4.5 × N − 7.5 seconds, so 40 covers about 10 PRs.
 
-**Picking a value.** In a test, `gh stack submit` opened PRs about 4.5 seconds apart. The second PR of an N-PR submit needed about 4.5 × N − 12 seconds of wait.
+**Picking a value.** In a test, `gh stack submit` opened PRs about 4.5 seconds apart. The second PR of an N-PR submit needed about 4.5 × N − 12 seconds of wait. Both formulas count the wait from the gate's first check, about 5 seconds after the PR opens.
 
 | `stack-wait-seconds` | When to use it |
 | -------------------- | -------------- |
@@ -188,7 +189,7 @@ In a bigger submit than the wait covers, the lowest mid-stack PRs run CI.
 **What the wait costs.**
 
 - A separate gate job takes about the wait plus 5 seconds. Up to a wait of about 50 seconds, that's 1 billed minute.
-- Each extra 60 seconds or so adds about 1 billed minute. Only PRs that wait the full time pay it: the lowest mid-stack PRs of a large submit, and the full-wait cases above.
+- A wait above about 50 seconds makes it 2 billed minutes. Only PRs that wait the full time pay it: the lowest mid-stack PRs of a large submit, and the full-wait cases above.
 - In a one-job layout the wait runs in a job that runs anyway, so there's no gate job to pay for. Put the gate step after the steps that run on every layer.
 
 ## You might not need this action
