@@ -17,7 +17,7 @@ This action uses stack metadata so the jobs you gate run on the bottom of the re
 
 ## Quick start
 
-1. Trigger on `opened`, `synchronize`, `reopened`, and `edited`. GitHub's default omits `edited`. Add `labeled` only if you use the force-run label. [Why those types](#pull_request-types)
+1. Trigger on these four `pull_request` types. GitHub's default omits `edited`. [Why those types](#pull_request-types)
 
 ```yaml
 on:
@@ -38,8 +38,7 @@ gate:
   steps:
     - id: gate
       uses: raulgg/stack-ci-gate@v1
-      # A crash before the gate decides leaves should-run empty, and the jobs below run.
-      continue-on-error: true
+      continue-on-error: true # if the gate breaks, jobs still run
 ```
 
 3. Skip mid-stack jobs:
@@ -49,11 +48,9 @@ needs: gate
 if: ${{ !cancelled() && needs.gate.outputs.should-run != 'false' }}
 ```
 
-The gate writes only `'true'` or `'false'`. If the gate job fails or is skipped, `should-run` is empty and the job runs. `!cancelled()` is what lets it run after a failed gate job. See [What fails open](#what-fails-open) for the exceptions.
+If the gate fails, `should-run` is empty and the job runs. [What fails open](#what-fails-open)
 
-Do not add job-level `if:` filters on events to the gate job or to required jobs. [A skipped run can replace a failure](#a-skipped-run-can-replace-a-failure)
-
-Gated jobs start after the gate decides: a few seconds, or up to `stack-wait-seconds` (default 40) on `opened` and `reopened`. See [Waiting for the stack](#waiting-for-the-stack-on-opened).
+Do not filter events with a job-level `if:` on the gate job or on required jobs. [A skipped run can replace a failure](#a-skipped-run-can-replace-a-failure)
 
 ### Have an agent set this up for you
 
@@ -94,8 +91,7 @@ jobs:
     steps:
       - id: gate
         uses: raulgg/stack-ci-gate@v1
-        # A crash before the gate decides leaves should-run empty, and the jobs below run.
-        continue-on-error: true
+        continue-on-error: true # if the gate breaks, jobs still run
 
   test:
     needs: gate
@@ -112,9 +108,9 @@ jobs:
       - run: npm run lint
 ```
 
-Only gated jobs need the gate. Jobs that run on every layer, such as `lint` or labeler, omit `needs: gate` and the `if:`, and start at once.
+Jobs that run on every layer, such as `lint`, omit `needs: gate` and the `if:`.
 
-With `!cancelled()`, a job also runs when another job in its `needs` failed. When a gated job needs other jobs too, add `&& needs.<other>.result == 'success'` for each of them. This checks direct needs only. If a job further up the chain can fail while a direct need still succeeds, add that job to `needs` and check it too.
+With `!cancelled()`, a job also runs when another job in its `needs` failed. If a gated job needs other jobs, add `&& needs.<other>.result == 'success'` for each.
 
 ### Inputs
 
@@ -129,7 +125,7 @@ With `!cancelled()`, a job also runs when another job in its `needs` failed. Whe
 
 ### Outputs
 
-All outputs are strings. Gate jobs with `should-run != 'false'`, so an empty output still runs them. Compare the other outputs with `== 'true'` or `== 'false'`. Use `is-bottom` or `is-top` when a job should run only there, and add those names to `jobs.gate.outputs` first. A job gated on `is-bottom == 'true'` or `is-top == 'true'` still skips when the gate fails, because neither is `'true'` then.
+All outputs are strings. Gate jobs with `should-run != 'false'`. Compare the other outputs with `== 'true'` or `== 'false'`. Use `is-bottom` or `is-top` when a job should run only there, and add those names to `jobs.gate.outputs` first. Those jobs skip when the gate fails.
 
 | Name         | Meaning                                      |
 | ------------ | -------------------------------------------- |
@@ -160,71 +156,22 @@ The action never cancels the run. `merge_group` always runs.
 
 ### `pull_request` types
 
-The gate job only runs when the workflow starts. The recipe lists GitHub's default (`opened`, `synchronize`, `reopened`) plus `edited`. `labeled` is opt-in, and `stacked` is optional.
+The gate job only runs when the workflow starts.
 
-| Type | Recipe | What it covers | If you leave it out |
-| ---- | ------ | -------------- | ------------------- |
-| `opened` | Required | First run, including `gh stack submit`. | No first run. |
-| `synchronize` | Required | Pushes and rebases, including the cascade rebase after a bottom merge. | No run on new commits. |
-| `reopened` | Required | The PR is opened again. | A reopened PR has no run until the next push. |
-| `edited` | Recommended | Base changes with no push. Also every title and body edit. | A retarget with no rebase leaves the remaining bottom with only its mid-stack result. [Details](#why-edited-stays-unfiltered) |
-| `stacked` | Optional | A PR added to a stack. | Almost nothing. A PR whose `opened` run never started has no run until the next push or edit. If its check is required, it stays Pending and blocks merging until then. |
-| `labeled` | Opt-in | Any added label. [Force-run](#force-run-without-a-push) | Nothing. The label forces a run on the next push or edit. |
+| Type | Add it | Why |
+| ---- | ------ | --- |
+| `opened`, `synchronize`, `reopened` | Always | GitHub's default: new PRs, pushes, and rebases. |
+| `edited` | Always | A base change with no push, such as the retarget after a bottom merge. |
+| `labeled` | Only for an instant force-run | The force-run label starts a run at once. Without it, the label applies on the next push or edit. |
+| `stacked` | Optional | A PR added to a stack. `opened` or `synchronize` almost always tested that commit already. |
 
-`stacked` almost never adds coverage:
+Keep `edited`, even though every title or body edit reruns CI:
 
-- In a week of data from one repo, 30 of 31 `stacked` runs repeated a head SHA that `opened` or `synchronize` had already tested.
-- A PR whose stack is not linked within `stack-wait-seconds` of opening fails open on `opened` and runs in full.
-- `github.event.pull_request.stack` is on every `pull_request` event of a PR that is in a stack at that moment, so `stacked` is not needed to read it.
-- actionlint 1.7.12 reports `stacked` as an invalid activity type. It is in the [webhook reference](https://docs.github.com/en/webhooks/webhook-events-and-payloads#pull_request), but not on the Actions [Events that trigger workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request) page.
+- After a bottom merge, GitHub retargets the next PR and usually rebases it. When the rebase does not happen, or someone changes the base by hand, `edited` is the only run on the new base.
+- Without that run, the PR keeps its mid-stack Skipped checks, and a Skipped required check counts as passing.
+- Do not filter title and body edits with a job-level `if:`. [A skipped run can replace a failure](#a-skipped-run-can-replace-a-failure)
 
-### Why `edited` stays unfiltered
-
-After a bottom merge, GitHub retargets the next PR at the stack base, which fires `edited`, and usually rebases the rest of the stack, which fires `synchronize`. In a test on 2026-11-12, squash, rebase and merge-commit merges, with delete-branch-on-merge both on and off, each did both within a few seconds.
-
-`edited` is the only run when a base change comes with no push:
-
-- The cascade rebase does not happen and the PR has no merge conflict. The stack gets a **Rebase stack** button instead.
-- Someone changes the base by hand (`gh pr edit --base`, or the UI). That includes PR chains outside GitHub stacks, which get no cascade rebase.
-
-Without `edited`, the remaining bottom then keeps only its mid-stack result. Its gated checks show Skipped, and a Skipped required check counts as passing. See [A skipped run can replace a failure](#a-skipped-run-can-replace-a-failure).
-
-It does not help while the PR has a merge conflict. No workflow runs until the conflict is resolved, and that push fires `synchronize`. In a merge queue, the `merge_group` run always runs gated jobs.
-
-Every edit, including title and body edits, reruns CI. On a standalone, bottom or top PR that is full CI. On a mid-stack PR it is the gate and the jobs that run on every layer. Bots that rewrite PR bodies count too. In a week of data from one repo, `edited` started 84 runs that billed 564 minutes, and 66 of those runs were title or body edits.
-
-Do not filter title and body edits with a job-level `if:`. The filtered run still reports its jobs, as Skipped, and a Skipped required job replaces an earlier failure on the same commit. [A skipped run can replace a failure](#a-skipped-run-can-replace-a-failure)
-
-### Force-run without a push
-
-Add `labeled` only if you want the force-run label to start a run without a push. Without `labeled`, the label takes effect on the next push or edit. With it, any added label reruns CI. Do not filter other labels with a job-level `if:`, for the same reason as `edited`. Labels added with `GITHUB_TOKEN` never start runs. Labels added by apps or PATs do.
-
-```yaml
-on:
-  pull_request:
-    types: [opened, synchronize, reopened, edited, labeled]
-```
-
-### See a result without a push: `workflow_dispatch`
-
-**A dispatched run never satisfies or clears a required check** ([GitHub docs](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#checks-from-some-workflow-jobs-are-not-evaluated)). Use it only to see a result. In a test on 2026-11-12, a dispatched `test` Success on the PR head left a PR whose `pull_request` `test` had failed BLOCKED.
-
-```yaml
-on:
-  pull_request:
-    types: [opened, synchronize, reopened, edited]
-  workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-```
-
-- It works only once the workflow is on the default branch.
-- It tests the branch head, not the merge ref.
-- Gated jobs run in full, because the gate fails open off `pull_request`.
-- Key the concurrency group as above. A key on `github.head_ref || github.ref_name` is shared with pull request runs, so a dispatch can cancel the run your required check needs.
-- `cancel-in-progress` is safe: no run is a filtered no-op, so the newer run always reports the gate's decision for the PR's current place in the stack.
+With `labeled`, any added label reruns CI. Do not filter those either.
 
 ### Waiting for the stack on `opened`
 
@@ -237,7 +184,7 @@ concurrency:
 
 A stack opened top-first by hand also decides at once, so every PR in it runs CI on `opened`.
 
-The bottom PR of a new stack is usually one of these. Its `opened` run reports `is-stacked` as `'false'`, with empty `position` and `size`. Later events, such as `synchronize`, `edited` or `stacked`, report its place in the stack.
+The bottom PR of a new stack is usually one of these. Its `opened` run reports `is-stacked` as `'false'`, with empty `position` and `size`. Later events report its place in the stack.
 
 **Full wait, then CI runs.** These PRs wait the full `stack-wait-seconds`, so their gated jobs start that much later:
 
@@ -265,12 +212,10 @@ In a bigger submit than the wait covers, the lowest mid-stack PRs run CI.
 
 ## Known gaps
 
-- A retarget with no push starts only an `edited` run. If you leave `edited` out and the cascade rebase does not happen, the remaining bottom has no run on its new base. A push or `gh stack rebase` starts a `pull_request` run. Run workflow (`workflow_dispatch`) does not satisfy a required check ([GitHub docs](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#checks-from-some-workflow-jobs-are-not-evaluated)). See [`workflow_dispatch`](#see-a-result-without-a-push-workflow_dispatch).
-- Workflows do not run on `pull_request` activity while the PR has a merge conflict ([Events that trigger workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request)). See [Why `edited` stays unfiltered](#why-edited-stays-unfiltered).
-- `pull_request` runs test the merge ref. The same head SHA can test a different tree after the base moves.
-- Path filters on a stacked PR compare against the stack base, as if the PR targets it.
-- A bottom merge done with `GITHUB_TOKEN`, such as `gh stack merge` in a workflow, retargets the next PR but does not rebase it, and starts no `edited` or `synchronize` run. In a live test, that PR kept its mid-stack results, with the gated job Skipped, and GitHub showed it as mergeable. Merge the bottom with a user token instead, or push to the next PR (`gh stack rebase`) after the merge.
-- Unverified: a mid-stack PR removed from its stack with `gh stack unstack` may keep its Skipped checks with no new run. The webhook reference has no `unstacked` action.
+- No `pull_request` run starts while the PR has a merge conflict. Resolve it and push.
+- A `workflow_dispatch` run [does not satisfy a required check](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#checks-from-some-workflow-jobs-are-not-evaluated). Push or run `gh stack rebase` instead.
+- A bottom merge made with `GITHUB_TOKEN`, such as `gh stack merge` in a workflow, starts no run on the next PR. That PR keeps its Skipped checks and looks mergeable (tested live). Merge with a user token, or run `gh stack rebase` after the merge.
+- Path filters on a stacked PR compare against the stack base.
 
 ## You might not need this action
 
@@ -285,13 +230,13 @@ if: >
 
 That expression covers lowest unmerged and top. It is enough when you have one workflow and accept a full run on `opened`. GitHub's snippets use `stack != null && …`. Copying that onto a test job skips standalone pull requests.
 
-This action skips mid-stack on `gh stack submit` when the stack is linked within `stack-wait-seconds` (default 40) of `opened`. With `bottom-n` of 1 or more, a PR into the default branch is decided at once. A submit that links later than the wait runs those PRs in full (safe, just costly). The `if:` above treats a missing `stack` as standalone, so every layer runs on `opened`.
+This action skips mid-stack on `gh stack submit`. The `if:` above treats a missing `stack` as standalone, so every layer runs on `opened`.
 
 ## Required checks
 
 A job skipped by `if:` reports **Success**. GitHub will merge a PR whose required check was skipped this way.
 
-A skipped step also leaves its job **Success**, because the job ran. If a required check should mean that step ran, put the step in its own job and skip that job. Keep `needs: gate` on the job, and give the job `if: ${{ !cancelled() }}`. Then skip only the steps that should not run on every layer:
+A skipped step also leaves its job **Success**, because the job ran. If a required check should mean that step ran, put the step in its own job and skip that job. Keep `needs: gate` on the job, with `if: ${{ !cancelled() }}`. Then skip only the steps that should not run on every layer:
 
 ```yaml
 test:
@@ -315,37 +260,31 @@ A workflow that never starts (path filters, `[skip ci]`, workflow-level `if:`) l
 
 ### A skipped run can replace a failure
 
-A later run that skips a required job on the same commit replaces an earlier **Failure** for that check, and a failing PR can become mergeable.
+A run that skips a required job replaces an earlier **Failure** on the same commit. A failing PR can then become mergeable (tested live).
 
-This was tested live. With `test` required, a PR had `test` Failure and was blocked. A title edit started a run whose job-level `if:` skipped the gate job, `test` reported Skipped, and GitHub reported the PR mergeable.
+- **Don't** filter events (title edits, labels, drafts) with a job-level `if:` on the gate job or on required jobs.
+- **Do** remove the type from `on:`, so the event starts no run. Keep `edited` and accept the reruns.
 
-- **Do not** add job-level `if:` filters on events (title or body edits, labels, drafts) to the gate job or to required jobs of a gated workflow.
-- **Do instead** filter optional types (`labeled`, `stacked`, draft types) with `on:` types, so the event starts no run. `edited` is the exception: keep it, remove the filter, and accept the reruns.
-
-Mid-stack Skipped checks are by design.
-
-The same mechanism means a PR that failed CI and later became mid-stack on the same commit shows its gated checks as Skipped until it becomes the remaining bottom or the top again.
+For the same reason, a PR that failed CI and then became mid-stack on the same commit shows its gated checks as Skipped.
 
 ### What fails open
 
-The recipe runs gated jobs when the gate fails. Two parts cover two different failures:
+If the gate fails, gated jobs run:
 
-- `continue-on-error: true` on the gate step covers a failed gate step: an error inside the action, or a failed output write. The step's conclusion is Success, so the gate job succeeds with `should-run` empty, and `!= 'false'` runs the gated jobs.
-- `!cancelled()` on the jobs that need the gate covers a gate job that fails outside its step: the action fails to download during job setup, the runner is lost, or an earlier step such as checkout fails. `should-run` is then empty, and `!= 'false'` runs the job. When the gate job times out, GitHub reports it as cancelled, but the run is not cancelled, so `!cancelled()` stays true and the gated jobs run (tested live). Without a status function, GitHub skips the jobs that need a failed job, and a job skipped because a needed job failed [may not block merging](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks).
+- `continue-on-error: true` covers an error in the gate step.
+- `!cancelled()` covers a gate job that fails outside that step: the action fails to download, the runner is lost, or the job times out.
 
-A skipped gate job also leaves `should-run` empty, so the gated jobs run.
+Not covered:
 
-Not covered: a cancelled run, a workflow that never starts, and jobs gated on `is-bottom == 'true'` or `is-top == 'true'`. A cancelled run reports its gated jobs as Cancelled, which does not pass a required check, so the PR stays blocked until a new run (tested live). A gate that already wrote `'false'` before its step failed still skips the gated jobs.
+- A cancelled run. Its gated jobs report Cancelled, and the PR stays blocked until a new run.
+- A workflow that never starts.
+- Jobs gated on `is-bottom` or `is-top`.
 
-Requiring the `gate` job as a check is optional extra protection. A failed gate job then blocks the merge even if a gated job is not required. Before you require it:
-
-- Required check names must be unique across workflows. With a `gate` job in two workflows, give each job its own `name:`. See [About protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches).
-- A workflow with `paths:` filters does not start for some pull requests, and a required `gate` from it stays Pending and blocks the PR.
-- In a repo with a merge queue, the workflow needs `merge_group`, or a required `gate` stays Pending in the queue.
+You can also require the `gate` job as a check. Its name must be unique across workflows. It stays Pending when the workflow has `paths:` filters, or lacks `merge_group` in a repo with a merge queue.
 
 ### One-job layout
 
-When the gate is a step in the job it gates, give the step `id: gate` and check that step's output. With `continue-on-error: true` the step's conclusion is Success, so the gated steps need no status function.
+When the gate is a step in the job it gates, check that step's output. The gated steps need no `!cancelled()`.
 
 ```yaml
 test:
