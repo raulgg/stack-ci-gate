@@ -48,7 +48,7 @@ needs: gate
 if: ${{ !cancelled() && needs.gate.outputs.should-run != 'false' }}
 ```
 
-If the gate fails, `should-run` is empty and the job runs. [What fails open](#what-fails-open)
+If the gate fails, `should-run` is empty and the job runs.
 
 ### Have an agent set this up for you
 
@@ -103,6 +103,8 @@ jobs:
 Jobs that should still run on every layer, such as lint or labeler, omit `needs: gate` and the `if:`.
 
 With `!cancelled()`, a job also runs when another job in its `needs` failed. If a gated job needs other jobs, add `&& needs.<other>.result == 'success'` for each.
+
+To gate steps inside one job, add the gate as a step with `continue-on-error: true`, and put `if: steps.gate.outputs.should-run != 'false'` on those steps.
 
 ### Inputs
 
@@ -239,49 +241,7 @@ You are trusting CI on the lowest unmerged pull request, which targets the stack
 
 A workflow that never starts (path filters, `[skip ci]`, workflow-level `if:`) leaves required checks **Pending** and blocks merge.
 
-### A skipped run can replace a failure
-
-A run that skips a required job replaces an earlier **Failure** on the same commit. A failing PR can then become mergeable (tested live).
-
-- **Don't** filter events (title edits, labels, drafts) with a job-level `if:` on the gate job or on required jobs.
-- **Do** remove the type from `on:`, so the event starts no run.
-
-For the same reason, a PR that failed CI and then became mid-stack on the same commit shows its gated checks as Skipped.
-
-### What fails open
-
-If the gate fails, gated jobs run:
-
-- `continue-on-error: true` covers an error in the gate step.
-- `!cancelled()` covers a gate job that fails outside that step: the action fails to download, the runner is lost, or the job times out.
-
-Not covered:
-
-- A cancelled run. Its gated jobs report Cancelled, and the PR stays blocked until a new run.
-- A workflow that never starts.
-- Jobs gated on `is-bottom` or `is-top`.
-
-You can also require the `gate` job as a check. Its name must be unique across workflows. It stays Pending when the workflow has `paths:` filters, or lacks `merge_group` in a repo with a merge queue.
-
-### One-job layout
-
-When the gate is a step in the job it gates, check that step's output. The gated steps need no `!cancelled()`.
-
-```yaml
-test:
-  runs-on: ubuntu-latest
-  permissions:
-    contents: read
-    pull-requests: read
-  steps:
-    - uses: actions/checkout@v4
-    - run: npm run lint
-    - id: gate
-      uses: raulgg/stack-ci-gate@v1
-      continue-on-error: true
-    - run: npm test
-      if: steps.gate.outputs.should-run != 'false'
-```
+Do not filter events (title edits, labels, drafts) with a job-level `if:` on the gate job or on a required job. A run that skips a required job replaces an earlier **Failure** on the same commit, and the failing PR becomes mergeable. Remove the type from `on:` instead.
 
 ## Install the skill
 
