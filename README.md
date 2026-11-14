@@ -48,9 +48,7 @@ needs: gate
 if: ${{ !cancelled() && needs.gate.outputs.should-run != 'false' }}
 ```
 
-If the gate fails, `should-run` is empty and the job runs. [What fails open](#what-fails-open)
-
-Do not filter events with a job-level `if:` on the gate job or on required jobs. [A skipped run can replace a failure](#a-skipped-run-can-replace-a-failure)
+If the gate fails, `should-run` is empty and the job runs.
 
 ### Have an agent set this up for you
 
@@ -112,6 +110,8 @@ Jobs that run on every layer, such as `lint`, omit `needs: gate` and the `if:`.
 
 With `!cancelled()`, a job also runs when another job in its `needs` failed. If a gated job needs other jobs, add `&& needs.<other>.result == 'success'` for each.
 
+To gate steps inside one job, add the gate as a step with `continue-on-error: true`, and put `if: steps.gate.outputs.should-run != 'false'` on those steps.
+
 ### Inputs
 
 | Name                 | Default               | Purpose                                                                                     |
@@ -165,13 +165,7 @@ The gate job only runs when the workflow starts.
 | `labeled` | Only for an instant force-run | The force-run label starts a run at once. Without it, the label applies on the next push or edit. |
 | `stacked` | Optional | A PR added to a stack. `opened` or `synchronize` almost always tested that commit already. |
 
-Keep `edited`, even though every title or body edit reruns CI:
-
-- After a bottom merge, GitHub retargets the next PR and usually rebases it. When the rebase does not happen, or someone changes the base by hand, `edited` is the only run on the new base.
-- Without that run, the PR keeps its mid-stack Skipped checks, and a Skipped required check counts as passing.
-- Do not filter title and body edits with a job-level `if:`. [A skipped run can replace a failure](#a-skipped-run-can-replace-a-failure)
-
-With `labeled`, any added label reruns CI. Do not filter those either.
+Keep `edited`, even though every title or body edit reruns CI. When the base changes with no push, it is the only run on the new base. Without it, the PR keeps its mid-stack Skipped checks, which count as passing. With `labeled`, any added label reruns CI. [Do not filter either with a job-level `if:`](#required-checks).
 
 ### Waiting for the stack on `opened`
 
@@ -258,49 +252,7 @@ You are trusting CI on the lowest unmerged pull request, which targets the stack
 
 A workflow that never starts (path filters, `[skip ci]`, workflow-level `if:`) leaves required checks **Pending** and blocks merge.
 
-### A skipped run can replace a failure
-
-A run that skips a required job replaces an earlier **Failure** on the same commit. A failing PR can then become mergeable (tested live).
-
-- **Don't** filter events (title edits, labels, drafts) with a job-level `if:` on the gate job or on required jobs.
-- **Do** remove the type from `on:`, so the event starts no run. Keep `edited` and accept the reruns.
-
-For the same reason, a PR that failed CI and then became mid-stack on the same commit shows its gated checks as Skipped.
-
-### What fails open
-
-If the gate fails, gated jobs run:
-
-- `continue-on-error: true` covers an error in the gate step.
-- `!cancelled()` covers a gate job that fails outside that step: the action fails to download, the runner is lost, or the job times out.
-
-Not covered:
-
-- A cancelled run. Its gated jobs report Cancelled, and the PR stays blocked until a new run.
-- A workflow that never starts.
-- Jobs gated on `is-bottom` or `is-top`.
-
-You can also require the `gate` job as a check. Its name must be unique across workflows. It stays Pending when the workflow has `paths:` filters, or lacks `merge_group` in a repo with a merge queue.
-
-### One-job layout
-
-When the gate is a step in the job it gates, check that step's output. The gated steps need no `!cancelled()`.
-
-```yaml
-test:
-  runs-on: ubuntu-latest
-  permissions:
-    contents: read
-    pull-requests: read
-  steps:
-    - uses: actions/checkout@v4
-    - run: npm run lint
-    - id: gate
-      uses: raulgg/stack-ci-gate@v1
-      continue-on-error: true
-    - run: npm test
-      if: steps.gate.outputs.should-run != 'false'
-```
+Do not filter events (title edits, labels, drafts) with a job-level `if:` on the gate job or on a required job. A run that skips a required job replaces an earlier **Failure** on the same commit, and the failing PR becomes mergeable. Remove the type from `on:` instead, except `edited`: keep it and accept the reruns.
 
 ## Install the skill
 
