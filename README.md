@@ -156,16 +156,21 @@ The action never cancels the run. `merge_group` always runs.
 
 ### `pull_request` types
 
-The gate job only runs when the workflow starts.
+The gate job only runs when the workflow starts. List every type this action needs:
 
-| Type | Add it | Why |
-| ---- | ------ | --- |
-| `opened`, `synchronize`, `reopened` | Always | GitHub's default: new PRs, pushes, and rebases. |
-| `edited` | Always | A base change with no push, such as the retarget after a bottom merge. |
-| `labeled` | Only for an instant force-run | The force-run label starts a run at once. Without it, the label applies on the next push or edit. |
-| `stacked` | Optional | A PR added to a stack. `opened` or `synchronize` almost always tested that commit already. |
+| Type | Why this action needs it |
+| ---- | ------------------------ |
+| `opened` | First run, including `gh stack submit`. |
+| `synchronize` | Pushes and rebases. |
+| `reopened` | The PR is opened again. |
+| `edited` | After a bottom merge, the next PR is retargeted at the stack base. That remaining bottom needs a run. |
 
-Keep `edited`, even though every title or body edit reruns CI. When the base changes with no push, it is the only run on the new base. Without it, the PR keeps its mid-stack Skipped checks, which count as passing. With `labeled`, any added label reruns CI. [Do not filter either with a job-level `if:`](#required-checks).
+GitHub's default is `opened`, `synchronize`, `reopened`. Without `edited`, a remaining-bottom retarget never starts the gate. With it, every title or body edit also starts a run. Do not filter those with a job-level `if:` (see [Required checks](#required-checks)).
+
+Two more types are optional:
+
+- `labeled` starts a force-run without a push. Any added label starts a run. Only the force-run label turns a skip into a run. A workflow that leaves out `labeled` still force-runs on the next push or edit while the label is on the pull request.
+- `stacked` starts a run on `gh stack link` for PRs that already existed. `opened` or `synchronize` has almost always tested that commit already.
 
 ### Waiting for the stack on `opened`
 
