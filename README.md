@@ -38,8 +38,7 @@ gate:
   steps:
     - id: gate
       uses: raulgg/stack-ci-gate@v1
-      # A crash before the gate decides leaves should-run empty, and the jobs below run.
-      continue-on-error: true
+      continue-on-error: true # if the gate breaks, jobs still run
 ```
 
 3. Skip mid-stack jobs:
@@ -49,7 +48,7 @@ needs: gate
 if: ${{ !cancelled() && needs.gate.outputs.should-run != 'false' }}
 ```
 
-The gate writes only `'true'` or `'false'`. If the gate job fails or is skipped, `should-run` is empty and the job runs. `!cancelled()` is what lets it run after a failed gate job. See [What fails open](#what-fails-open) for the exceptions.
+If the gate fails, `should-run` is empty and the job runs. [What fails open](#what-fails-open)
 
 ### Have an agent set this up for you
 
@@ -90,8 +89,7 @@ jobs:
     steps:
       - id: gate
         uses: raulgg/stack-ci-gate@v1
-        # A crash before the gate decides leaves should-run empty, and the jobs below run.
-        continue-on-error: true
+        continue-on-error: true # if the gate breaks, jobs still run
 
   test:
     needs: gate
@@ -104,7 +102,7 @@ jobs:
 
 Jobs that should still run on every layer, such as lint or labeler, omit `needs: gate` and the `if:`.
 
-With `!cancelled()`, a job also runs when another job in its `needs` failed. When a gated job needs other jobs too, add `&& needs.<other>.result == 'success'` for each of them. This checks direct needs only. If a job further up the chain can fail while a direct need still succeeds, add that job to `needs` and check it too.
+With `!cancelled()`, a job also runs when another job in its `needs` failed. If a gated job needs other jobs, add `&& needs.<other>.result == 'success'` for each.
 
 ### Inputs
 
@@ -119,7 +117,7 @@ With `!cancelled()`, a job also runs when another job in its `needs` failed. Whe
 
 ### Outputs
 
-All outputs are strings. Gate jobs with `should-run != 'false'`, so an empty output still runs them. Compare the other outputs with `== 'true'` or `== 'false'`. Use `is-bottom` or `is-top` when a job should run only there, and add those names to `jobs.gate.outputs` first. A job gated on `is-bottom == 'true'` or `is-top == 'true'` still skips when the gate fails, because neither is `'true'` then.
+All outputs are strings. Gate jobs with `should-run != 'false'`. Compare the other outputs with `== 'true'` or `== 'false'`. Use `is-bottom` or `is-top` when a job should run only there, and add those names to `jobs.gate.outputs` first. Those jobs skip when the gate fails.
 
 | Name         | Meaning                                      |
 | ------------ | -------------------------------------------- |
@@ -219,7 +217,7 @@ This action skips mid-stack on `gh stack submit`. The `if:` above treats a missi
 
 A job skipped by `if:` reports **Success**. GitHub will merge a PR whose required check was skipped this way.
 
-A skipped step also leaves its job **Success**, because the job ran. If a required check should mean that step ran, put the step in its own job and skip that job. Keep `needs: gate` on the job, and give the job `if: ${{ !cancelled() }}`. Then skip only the steps that should not run on every layer:
+A skipped step also leaves its job **Success**, because the job ran. If a required check should mean that step ran, put the step in its own job and skip that job. Keep `needs: gate` on the job, with `if: ${{ !cancelled() }}`. Then skip only the steps that should not run on every layer:
 
 ```yaml
 test:
@@ -243,37 +241,31 @@ A workflow that never starts (path filters, `[skip ci]`, workflow-level `if:`) l
 
 ### A skipped run can replace a failure
 
-A later run that skips a required job on the same commit replaces an earlier **Failure** for that check, and a failing PR can become mergeable.
+A run that skips a required job replaces an earlier **Failure** on the same commit. A failing PR can then become mergeable (tested live).
 
-This was tested live. With `test` required, a PR had `test` Failure and was blocked. A title edit started a run whose job-level `if:` skipped the gate job, `test` reported Skipped, and GitHub reported the PR mergeable.
+- **Don't** filter events (title edits, labels, drafts) with a job-level `if:` on the gate job or on required jobs.
+- **Do** remove the type from `on:`, so the event starts no run.
 
-- **Do not** add job-level `if:` filters on events (title or body edits, labels, drafts) to the gate job or to required jobs of a gated workflow.
-- **Do instead** filter with `on:` types, so the event starts no run.
-
-Mid-stack Skipped checks are by design.
-
-The same mechanism means a PR that failed CI and later became mid-stack on the same commit shows its gated checks as Skipped until it becomes the remaining bottom or the top again.
+For the same reason, a PR that failed CI and then became mid-stack on the same commit shows its gated checks as Skipped.
 
 ### What fails open
 
-The recipe runs gated jobs when the gate fails. Two parts cover two different failures:
+If the gate fails, gated jobs run:
 
-- `continue-on-error: true` on the gate step covers a failed gate step: an error inside the action, or a failed output write. The step's conclusion is Success, so the gate job succeeds with `should-run` empty, and `!= 'false'` runs the gated jobs.
-- `!cancelled()` on the jobs that need the gate covers a gate job that fails outside its step: the action fails to download during job setup, the runner is lost, or an earlier step such as checkout fails. `should-run` is then empty, and `!= 'false'` runs the job. When the gate job times out, GitHub reports it as cancelled, but the run is not cancelled, so `!cancelled()` stays true and the gated jobs run (tested live). Without a status function, GitHub skips the jobs that need a failed job, and a job skipped because a needed job failed [may not block merging](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks).
+- `continue-on-error: true` covers an error in the gate step.
+- `!cancelled()` covers a gate job that fails outside that step: the action fails to download, the runner is lost, or the job times out.
 
-A skipped gate job also leaves `should-run` empty, so the gated jobs run.
+Not covered:
 
-Not covered: a cancelled run, a workflow that never starts, and jobs gated on `is-bottom == 'true'` or `is-top == 'true'`. A cancelled run reports its gated jobs as Cancelled, which does not pass a required check, so the PR stays blocked until a new run (tested live). A gate that already wrote `'false'` before its step failed still skips the gated jobs.
+- A cancelled run. Its gated jobs report Cancelled, and the PR stays blocked until a new run.
+- A workflow that never starts.
+- Jobs gated on `is-bottom` or `is-top`.
 
-Requiring the `gate` job as a check is optional extra protection. A failed gate job then blocks the merge even if a gated job is not required. Before you require it:
-
-- Required check names must be unique across workflows. With a `gate` job in two workflows, give each job its own `name:`. See [About protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches).
-- A workflow with `paths:` filters does not start for some pull requests, and a required `gate` from it stays Pending and blocks the PR.
-- In a repo with a merge queue, the workflow needs `merge_group`, or a required `gate` stays Pending in the queue.
+You can also require the `gate` job as a check. Its name must be unique across workflows. It stays Pending when the workflow has `paths:` filters, or lacks `merge_group` in a repo with a merge queue.
 
 ### One-job layout
 
-When the gate is a step in the job it gates, give the step `id: gate` and check that step's output. With `continue-on-error: true` the step's conclusion is Success, so the gated steps need no status function.
+When the gate is a step in the job it gates, check that step's output. The gated steps need no `!cancelled()`.
 
 ```yaml
 test:
