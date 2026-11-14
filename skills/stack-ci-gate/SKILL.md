@@ -44,6 +44,7 @@ A gated pull request workflow is outdated when any of these is true:
 
 - A job or step compares `should-run` with `== 'true'`.
 - The gate step has no `continue-on-error: true`.
+- The `pull_request` trigger does not include `edited`.
 - A job that lists the gate job in `needs` has no `!cancelled()` in its `if`.
 - The gate job, or a job that lists it in `needs`, has a job-level `if` that filters on the event, such as `github.event.action`, `github.event.label`, or `github.event.pull_request.draft`.
 
@@ -71,9 +72,11 @@ Suggest. Make the workflow edit this task asked for. If this conversation has al
 
 Asked and Rewrite run this on each pull request workflow they gate.
 
-If `pull_request` has no `types` list, set it to `opened`, `synchronize`, `reopened`, `edited`, `stacked`, and `labeled`. If it has a list, add any of those six that are missing. Keep every other trigger, type, branch filter, and path filter.
+If `pull_request` has no `types` list, set it to `opened`, `synchronize`, `reopened`, and `edited`. If it has a list, add any of those four that are missing. Keep every other trigger, type, branch filter, and path filter.
 
-`labeled` lets a `stack-ci:run` label force a mid-stack run without a push. Leave `labeled` out when this workflow will not use the force-run label.
+- `edited`: always. It is the only run when a pull request's base changes with no push.
+- `labeled`: only when the user wants the `stack-ci:run` label to force a mid-stack run without a push.
+- `stacked`: only when the user asks.
 
 Add this job when no job uses this action yet. When one does, keep it and add `continue-on-error: true` to its gate step. The step id stays `gate`. When a job id `gate` already exists, name this job `stack-gate`. Use that id in `needs` and `if`.
 
@@ -103,7 +106,7 @@ On a gated step, put `if: needs.<gate-job>.outputs.should-run != 'false'` on the
 
 In a one-job layout, where the gate is a step in the job it gates, gated steps use `if: steps.gate.outputs.should-run != 'false'` and need no `!cancelled()`.
 
-Never add a job-level `if` that filters on the event (title or body edits, labels, drafts) to the gate job or to a job that lists it in `needs`. A run that skips a required job replaces an earlier Failure on the same commit, so a failing pull request can become mergeable. When such a filter exists, flag it in the reply with that reason and suggest removing that event's type from `on` instead.
+Never add a job-level `if` that filters on the event (title or body edits, labels, drafts) to the gate job or to a job that lists it in `needs`. A run that skips a required job replaces an earlier Failure on the same commit, so a failing pull request can become mergeable. When such a filter exists, flag it in the reply with that reason and suggest removing the filter. For `labeled` or a draft type, also suggest removing the type from `on`. Never suggest removing `edited`.
 
 When a job that runs on every layer `needs` a job you are about to gate, leave that dependency running on every layer. A skipped job skips the jobs that need it.
 
@@ -111,10 +114,10 @@ Add the types, the gate job, and those `needs` and `if` lines. Leave every other
 
 You are done when each edited file meets all of these:
 
-- It has `opened`, `synchronize`, `reopened`, `edited`, and `stacked`, and has `labeled` unless this workflow will not use the force-run label.
+- It has `opened`, `synchronize`, `reopened`, and `edited`. You added `labeled` or `stacked` only when the user asked.
 - It has one gate job, with `continue-on-error: true` on the gate step.
 - Every `should-run` comparison is `!= 'false'`.
 - Each job that lists the gate job in `needs` has `!cancelled()` in its `if`, plus `needs.<other>.result == 'success'` for each other need.
 - You added no job-level `if` that filters on the event.
 
-In the reply, name what you gated, what still runs on every layer, and which gated checks a mid-stack pull request will report as Success without running.
+In the reply, name what you gated, what still runs on every layer, and which gated checks a mid-stack pull request will report as Success without running. Say that every title or body edit reruns the workflow.

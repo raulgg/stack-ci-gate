@@ -17,12 +17,12 @@ This action uses stack metadata so the jobs you gate run on the bottom of the re
 
 ## Quick start
 
-1. Trigger on all six `pull_request` types. GitHub's default omits `stacked`, `edited`, and `labeled`. [Why those types](#pull_request-types)
+1. Trigger on these four `pull_request` types. GitHub's default omits `edited`. [Why those types](#pull_request-types)
 
 ```yaml
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited, stacked, labeled]
+    types: [opened, synchronize, reopened, edited]
 ```
 
 2. Add a `gate` job that always runs and lists `pull-requests: read`. The restricted token default is only `contents` and `packages`.
@@ -72,7 +72,7 @@ name: CI
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited, stacked, labeled]
+    types: [opened, synchronize, reopened, edited]
   merge_group:
 
 permissions:
@@ -98,9 +98,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: npm test
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm run lint
 ```
 
-Jobs that should still run on every layer, such as lint or labeler, omit `needs: gate` and the `if:`.
+Jobs that run on every layer, such as `lint`, omit `needs: gate` and the `if:`.
 
 With `!cancelled()`, a job also runs when another job in its `needs` failed. If a gated job needs other jobs, add `&& needs.<other>.result == 'success'` for each.
 
@@ -158,10 +164,13 @@ The gate job only runs when the workflow starts. List every type this action nee
 | `synchronize` | Pushes and rebases. |
 | `reopened` | The PR is opened again. |
 | `edited` | After a bottom merge, the next PR is retargeted at the stack base. That remaining bottom needs a run. |
-| `stacked` | `gh stack link` on PRs that already existed. |
-| `labeled` | Force-run without a push. Any added label starts a run. Only the force-run label turns a skip into a run. Leave this type out when you will not use the force-run label. |
 
-GitHub's default is `opened`, `synchronize`, `reopened`. Without `edited`, a remaining-bottom retarget never starts the gate. Without `stacked`, linking already-open PRs never starts it. A workflow that leaves out `labeled` still force-runs on the next push while the label is on the pull request.
+GitHub's default is `opened`, `synchronize`, `reopened`. Without `edited`, a remaining-bottom retarget never starts the gate. With it, every title or body edit also starts a run. Do not filter those with a job-level `if:` (see [Required checks](#required-checks)).
+
+Two more types are optional:
+
+- `labeled` starts a force-run without a push. Any added label starts a run. Only the force-run label turns a skip into a run. A workflow that leaves out `labeled` still force-runs on the next push or edit while the label is on the pull request.
+- `stacked` starts a run on `gh stack link` for PRs that already existed. `opened` or `synchronize` has almost always tested that commit already.
 
 ### Waiting for the stack on `opened`
 
@@ -174,7 +183,7 @@ GitHub's default is `opened`, `synchronize`, `reopened`. Without `edited`, a rem
 
 A stack opened top-first by hand also decides at once, so every PR in it runs CI on `opened`.
 
-The bottom PR of a new stack is usually one of these. Its `opened` run reports `is-stacked` as `'false'`, with empty `position` and `size`. Later events, such as `stacked`, report its place in the stack.
+The bottom PR of a new stack is usually one of these. Its `opened` run reports `is-stacked` as `'false'`, with empty `position` and `size`. Later events report its place in the stack.
 
 **Full wait, then CI runs.** These PRs wait the full `stack-wait-seconds`, so their gated jobs start that much later:
 
@@ -199,6 +208,13 @@ In a bigger submit than the wait covers, the lowest mid-stack PRs run CI.
 - A separate gate job takes about the wait plus 5 seconds. Up to a wait of about 50 seconds, that's 1 billed minute.
 - A wait above about 50 seconds makes it 2 billed minutes. Only PRs that wait the full time pay it: the lowest mid-stack PRs of a large submit, and the full-wait cases above.
 - In a one-job layout the wait runs in a job that runs anyway, so there's no gate job to pay for. Put the gate step after the steps that run on every layer.
+
+## Known gaps
+
+- No `pull_request` run starts while the PR has a merge conflict. Resolve it and push.
+- A `workflow_dispatch` run [does not satisfy a required check](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#checks-from-some-workflow-jobs-are-not-evaluated). Push or run `gh stack rebase` instead.
+- A bottom merge made with `GITHUB_TOKEN`, such as `gh stack merge` in a workflow, starts no run on the next PR. That PR keeps its Skipped checks and looks mergeable (tested live). Merge with a user token, or run `gh stack rebase` after the merge.
+- Path filters on a stacked PR compare against the stack base.
 
 ## You might not need this action
 
@@ -241,7 +257,7 @@ You are trusting CI on the lowest unmerged pull request, which targets the stack
 
 A workflow that never starts (path filters, `[skip ci]`, workflow-level `if:`) leaves required checks **Pending** and blocks merge.
 
-Do not filter events (title edits, labels, drafts) with a job-level `if:` on the gate job or on a required job. A run that skips a required job replaces an earlier **Failure** on the same commit, and the failing PR becomes mergeable. Remove the type from `on:` instead.
+Do not filter events (title edits, labels, drafts) with a job-level `if:` on the gate job or on a required job. A run that skips a required job replaces an earlier **Failure** on the same commit, and the failing PR becomes mergeable. Remove the type from `on:` instead, except `edited`: keep it and accept the reruns.
 
 ## Install the skill
 
