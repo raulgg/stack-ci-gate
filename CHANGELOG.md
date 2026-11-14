@@ -20,6 +20,7 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 - With `bottom-n` of 1 or more, a PR into the default branch no longer waits for a stack on `opened` and `reopened`, because it runs either way.
 - With `bottom-n` of 1 or more, a PR whose base branch is not the head of any open PR no longer waits on `opened` and `reopened`, because nothing can be stacked below it. With `bottom-n: 0` every PR still waits, because the bottom PR of a new stack should skip and looks like a standalone PR until the stack is linked.
 - On `opened` and `reopened`, any other PR that is not in a stack yet, such as one in a chain of PRs outside a stack, now waits up to `stack-wait-seconds` (default 40 s) instead of about 6 s; set `stack-wait-seconds: 6` to restore the 1.1.0 behaviour.
+- The recipe now runs gated jobs when the gate fails; update existing workflows to the new `continue-on-error` and `if:` lines in the [Quick start](README.md#quick-start).
 
 ### Fixed
 

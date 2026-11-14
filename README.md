@@ -38,14 +38,17 @@ gate:
   steps:
     - id: gate
       uses: raulgg/stack-ci-gate@v1
+      continue-on-error: true # if the gate breaks, jobs still run
 ```
 
 3. Skip mid-stack jobs:
 
 ```yaml
 needs: gate
-if: needs.gate.outputs.should-run == 'true'
+if: ${{ !cancelled() && needs.gate.outputs.should-run != 'false' }}
 ```
+
+If the gate fails, `should-run` is empty and the job runs.
 
 ### Have an agent set this up for you
 
@@ -86,10 +89,11 @@ jobs:
     steps:
       - id: gate
         uses: raulgg/stack-ci-gate@v1
+        continue-on-error: true # if the gate breaks, jobs still run
 
   test:
     needs: gate
-    if: needs.gate.outputs.should-run == 'true'
+    if: ${{ !cancelled() && needs.gate.outputs.should-run != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -97,6 +101,10 @@ jobs:
 ```
 
 Jobs that should still run on every layer, such as lint or labeler, omit `needs: gate` and the `if:`.
+
+With `!cancelled()`, a job also runs when another job in its `needs` failed. If a gated job needs other jobs, add `&& needs.<other>.result == 'success'` for each.
+
+To gate steps inside one job, add the gate as a step with `continue-on-error: true`, and put `if: steps.gate.outputs.should-run != 'false'` on those steps.
 
 ### Inputs
 
@@ -111,7 +119,7 @@ Jobs that should still run on every layer, such as lint or labeler, omit `needs:
 
 ### Outputs
 
-All outputs are strings. Compare them with `== 'true'` or `== 'false'`. Gate jobs with `should-run`. Use `is-bottom` or `is-top` when a job should run only there, and add those names to `jobs.gate.outputs` first.
+All outputs are strings. Gate jobs with `should-run != 'false'`. Compare the other outputs with `== 'true'` or `== 'false'`. Use `is-bottom` or `is-top` when a job should run only there, and add those names to `jobs.gate.outputs` first. Those jobs skip when the gate fails.
 
 | Name         | Meaning                                      |
 | ------------ | -------------------------------------------- |
@@ -211,17 +219,18 @@ This action skips mid-stack on `gh stack submit`. The `if:` above treats a missi
 
 A job skipped by `if:` reports **Success**. GitHub will merge a PR whose required check was skipped this way.
 
-A skipped step also leaves its job **Success**, because the job ran. If a required check should mean that step ran, put the step in its own job and skip that job. Keep `needs: gate` on the job and omit the job-level `if:`. Then skip only the steps that should not run on every layer:
+A skipped step also leaves its job **Success**, because the job ran. If a required check should mean that step ran, put the step in its own job and skip that job. Keep `needs: gate` on the job, with `if: ${{ !cancelled() }}`. Then skip only the steps that should not run on every layer:
 
 ```yaml
 test:
   needs: gate
+  if: ${{ !cancelled() }}
   runs-on: ubuntu-latest
   steps:
     - uses: actions/checkout@v4
     - run: npm test
     - run: npm run e2e
-      if: needs.gate.outputs.should-run == 'true'
+      if: needs.gate.outputs.should-run != 'false'
 ```
 
 The job still uses a runner, including `services:`. If no step in the job should run on a mid-stack pull request, skip the job instead.
@@ -231,6 +240,8 @@ Keep a `gate` job that always runs, and put `if:` on the jobs you gate. The work
 You are trusting CI on the lowest unmerged pull request, which targets the stack base, and the top, which is the full set of changes. If every layer must be tested independently, do not skip those jobs.
 
 A workflow that never starts (path filters, `[skip ci]`, workflow-level `if:`) leaves required checks **Pending** and blocks merge.
+
+Do not filter events (title edits, labels, drafts) with a job-level `if:` on the gate job or on a required job. A run that skips a required job replaces an earlier **Failure** on the same commit, and the failing PR becomes mergeable. Remove the type from `on:` instead.
 
 ## Install the skill
 
