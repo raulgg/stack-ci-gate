@@ -4,25 +4,24 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 
 ## Unreleased
 
+## 1.2.0 - 2026-11-16
+
 ### Added
 
-- The gate step writes a job summary with the decision, the reason, and the stack position.
-- When CI runs only because the gate could not decide, the gate step adds a warning annotation and an `Action needed` job summary section with the cause and the fix.
-- An empty `github-token` warns only on a stacked pull request that needs the stack listing, so fork and Dependabot pull requests stay quiet.
+- The gate step writes a job summary with the decision, the reason, and the stack position. It adds a `Waited for stack` row when the gate waited for the stack.
+- When CI runs only because the gate could not decide, the gate step adds a warning annotation and an `Action needed` job summary section with the cause and the fix. An empty `github-token` warns only on a stacked pull request that needs the stack listing, so fork and Dependabot pull requests stay quiet.
 - `stack-wait-seconds` (default `40`, 0 to 100) sets how long `opened` and `reopened` wait for `gh stack submit` to link the stack. 40 covers a submit of about 11 PRs and 100 about 25. A separate gate job stays at 1 billed minute up to a wait of about 50 seconds; a longer wait makes it 2 billed minutes, only on PRs that wait the full time.
-- The job summary adds a `Waited for stack` row when the gate waited for the stack.
 
 ### Changed
 
 - A failed output write adds a `Stack CI Gate` error annotation that says `should-run` is empty, and the gate step still fails.
 - An invalid input still runs CI, and its error annotation is now titled `Stack CI Gate`. The job summary adds an `Action needed` section.
 - With `bottom-n` above 1, the force-run label is checked before an unknown remaining depth, so a labeled mid-stack pull request reports `force-run label …` and does not warn when the stack lookup fails.
-- With `bottom-n` of 1 or more, a PR into the default branch no longer waits for a stack on `opened` and `reopened`, because it runs either way.
-- With `bottom-n` of 1 or more, a PR whose base branch is not the head of any open PR no longer waits on `opened` and `reopened`, because nothing can be stacked below it. With `bottom-n: 0` every PR still waits, because the bottom PR of a new stack should skip and looks like a standalone PR until the stack is linked.
+- With `bottom-n` of 1 or more, two kinds of PR no longer wait for a stack on `opened` and `reopened`, because they run either way: a PR into the default branch, and a PR whose base branch is not the head of any open PR. With `bottom-n: 0` every PR still waits, because the bottom PR of a new stack should skip and looks like a standalone PR until the stack is linked.
 - On `opened` and `reopened`, any other PR that is not in a stack yet, such as one in a chain of PRs outside a stack, now waits up to `stack-wait-seconds` (default 40 s) instead of about 6 s; set `stack-wait-seconds: 6` to restore the 1.1.0 behaviour.
 - The recipe now runs gated jobs when the gate fails; update existing workflows to the new `continue-on-error` and `if:` lines in the [Quick start](README.md#quick-start).
 - The recommended `pull_request` types are now `opened`, `synchronize`, `reopened`, and `edited`; `labeled` and `stacked` are optional. Workflows with all six keep working, and can remove both: `stacked` almost always repeats a commit that was already tested, and `labeled` reruns CI on any label.
-- The README says when the action costs more Actions minutes than it saves, says not to put the gate step in a matrix job, and corrects the one-job layout's wait cost: the wait can add a billed minute to that job. The skill leaves a workflow ungated when nothing in it takes more than about a minute, and never puts the gate step in a matrix job.
+- The README says when the action costs more Actions minutes than it saves, and says not to put the gate step in a matrix job. In a one-job layout, the wait can add a billed minute to that job. The skill leaves a workflow ungated when nothing in it takes more than about a minute, and never puts the gate step in a matrix job.
 
 ### Fixed
 
@@ -52,7 +51,8 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 - REST fallback on `opened` / `reopened` when `github.event.pull_request.stack` is missing.
 - Remaining-depth lookup via the Stacks API when `bottom-n > 1`.
 
-[Unreleased]: https://github.com/raulgg/stack-ci-gate/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/raulgg/stack-ci-gate/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/raulgg/stack-ci-gate/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/raulgg/stack-ci-gate/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/raulgg/stack-ci-gate/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/raulgg/stack-ci-gate/releases/tag/v1.0.0
