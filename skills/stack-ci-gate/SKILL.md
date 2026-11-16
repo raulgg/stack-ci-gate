@@ -74,7 +74,7 @@ Suggest. Make the workflow edit this task asked for. If this conversation has al
 
 Asked and Rewrite run this on each pull request workflow they gate.
 
-First check durations. Read recent run durations with `gh run list --workflow <file>` and `gh run view <run-id>`. When the workflow has no runs, judge from what each step does: tests, builds, and end-to-end suites are long; lint, format, and type checks are short. A job or step is long enough to skip when it takes more than about 1 minute. When the workflow is ungated and no job or step in it is long enough, leave the file unchanged. Say in the reply that you left it ungated because nothing in it takes more than about a minute, so the gate job's billed minute would cost more than it saves.
+First check durations. Read recent run durations with `gh run list --workflow <file>` and `gh run view <run-id>`. When the workflow has no runs, judge from what each step does: tests, builds, and end-to-end suites are long; lint, format, and type checks are short. A job or step is long enough to skip when it takes more than about 1 minute. When the workflow is ungated and no job or step in it is long enough, do not add the gate to it. Say in the reply that you left it ungated because nothing in it takes more than about a minute, so the gate job's billed minute would cost more than it saves.
 
 If `pull_request` has no `types` list, set it to `opened`, `synchronize`, `reopened`, and `edited`. If it has a list, add any of those four that are missing. Keep every other trigger, type, branch filter, and path filter.
 

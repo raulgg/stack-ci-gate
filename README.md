@@ -114,7 +114,7 @@ To gate steps inside one job, add the gate as a step with `continue-on-error: tr
 
 Do not put the gate step in a matrix job. Each leg of the matrix waits and polls on its own. A matrix job can list the gate job in `needs`.
 
-Each gated workflow pays for its own gate job. Gate only workflows that have long jobs.
+Each gated workflow pays for its own gate job. Gate only workflows that have long jobs. See [When this action costs more minutes than it saves](#when-this-action-costs-more-minutes-than-it-saves).
 
 ### Inputs
 
@@ -176,7 +176,7 @@ Two more types are optional:
 - `labeled` starts a force-run without a push. Any added label starts a run. Only the force-run label turns a skip into a run. A workflow that leaves out `labeled` still force-runs on the next push or edit while the label is on the pull request.
 - `stacked` starts a run on `gh stack link` for PRs that already existed. `opened` or `synchronize` has almost always tested that commit already.
 
-If your workflow still has the 1.1.0 types, you can remove `stacked` and `labeled`. `stacked` almost always repeats a commit that was already tested. `labeled` reruns CI on any label. Keep `labeled` only if the force-run label should start a run without a push.
+If your workflow still lists both from the 1.1.0 recipe, you can remove them. Keep `labeled` only if the force-run label should start a run without a push.
 
 ### Waiting for the stack on `opened`
 
@@ -222,13 +222,13 @@ GitHub bills each job rounded up to a whole minute. Standard runners are free in
 The gate job costs 1 billed minute on every run. It saves minutes only on mid-stack PRs. It costs more than it saves when:
 
 - Few PRs are in stacks. Standalone PRs run every gated job and also pay for the gate job.
-- Stacks have 2 PRs. The bottom and the top both run, so nothing is skipped.
+- Stacks have 2 PRs. With `run-top` on (the default), the bottom and the top both run, so nothing is skipped.
 - Gated jobs are short. Gating a job of about 1 minute saves nothing, because the gate job costs 1 minute.
 - Titles or bodies are edited often. The recipe requires `edited`, so each edit reruns gated jobs on standalone, bottom, and top PRs.
 
-A bottom merge sends the next PR a retarget `edited` and a cascade `synchronize` within about 3 seconds, so the new bottom runs CI twice.
+`gh stack merge` on the bottom PR sends the next PR a retarget `edited` and a cascade-rebase `synchronize` within about 3 seconds, so the new bottom runs CI twice.
 
-Rule of thumb: the share of PR events that skip as mid-stack has to exceed the gate's cost plus the share of runs that are title or body edits. The gate's cost is 1 minute divided by the gated jobs' minutes per run. With 10 minutes of gated jobs the gate costs 10%. If 15% of runs are title or body edits, more than 25% of runs have to skip.
+Rule of thumb: the share of runs that skip as mid-stack has to exceed the gate's cost plus the share of runs that are title or body edits. The gate's cost is 1 minute divided by the gated jobs' minutes per run. With 10 minutes of gated jobs the gate costs 10%. If 15% of runs are title or body edits, more than 25% of runs have to skip.
 
 ## Known gaps
 
