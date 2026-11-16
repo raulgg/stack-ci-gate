@@ -21,7 +21,8 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 - With `bottom-n` of 1 or more, a PR whose base branch is not the head of any open PR no longer waits on `opened` and `reopened`, because nothing can be stacked below it. With `bottom-n: 0` every PR still waits, because the bottom PR of a new stack should skip and looks like a standalone PR until the stack is linked.
 - On `opened` and `reopened`, any other PR that is not in a stack yet, such as one in a chain of PRs outside a stack, now waits up to `stack-wait-seconds` (default 40 s) instead of about 6 s; set `stack-wait-seconds: 6` to restore the 1.1.0 behaviour.
 - The recipe now runs gated jobs when the gate fails; update existing workflows to the new `continue-on-error` and `if:` lines in the [Quick start](README.md#quick-start).
-- The recommended `pull_request` types are now `opened`, `synchronize`, `reopened`, and `edited`; `labeled` and `stacked` are optional, and workflows with all six keep working.
+- The recommended `pull_request` types are now `opened`, `synchronize`, `reopened`, and `edited`; `labeled` and `stacked` are optional. Workflows with all six keep working, and can remove both: `stacked` almost always repeats a commit that was already tested, and `labeled` reruns CI on any label.
+- The README says when the action costs more Actions minutes than it saves, says not to put the gate step in a matrix job, and corrects the one-job layout's wait cost: the wait can add a billed minute to that job. The skill leaves a workflow ungated when nothing in it takes more than about a minute, and never puts the gate step in a matrix job.
 
 ### Fixed
 
