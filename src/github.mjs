@@ -1,4 +1,4 @@
-import { DEFAULT_STACK_WAIT_SECONDS } from './decide.mjs'
+import { DEFAULT_STACK_WAIT_SECONDS, isLowestUnmerged } from './decide.mjs'
 
 const DEFAULT_API = 'https://api.github.com'
 
@@ -88,7 +88,13 @@ async function githubGet(
     err.status = res.status
     throw err
   }
-  return res.json()
+  try {
+    return await res.json()
+  } catch (err) {
+    // A SyntaxError is a whole body that is not JSON. Any other failure is a body cut short.
+    if (err instanceof SyntaxError) throw err
+    throw tagError(err, { network: true })
+  }
 }
 
 /**
@@ -341,7 +347,7 @@ export async function resolvePull({
   }
 }
 
-function pullLookupProblem(pull, token, bottomN) {
+function pullLookupProblem(pull, token, needsListing) {
   if (pull.source === 'invalid-pr-number') {
     return { kind: 'invalid-pr-number', message: 'pr-number is not a pull request number' }
   }
@@ -350,7 +356,7 @@ function pullLookupProblem(pull, token, bottomN) {
   if (pull.source === 'no-token') {
     return { kind: 'no-token', quiet: true, message: 'no token to read the stack' }
   }
-  if (!token && bottomN > 1 && pull.stack != null) {
+  if (!token && needsListing) {
     return { kind: 'no-token', message: 'no token to read the stack' }
   }
   return null
@@ -400,9 +406,12 @@ export async function resolveContext({
     timeoutMs,
   })
 
+  // The remaining bottom is depth 1 without the listing.
+  const needsListing =
+    bottomN > 1 && pull.stack != null && !isLowestUnmerged(pull.stack, pull.prBaseRef)
   let remainingDepth = null
-  let lookupProblem = pullLookupProblem(pull, token, bottomN)
-  if (bottomN > 1 && pull.stack?.number != null && token) {
+  let lookupProblem = pullLookupProblem(pull, token, needsListing)
+  if (needsListing && pull.stack.number != null && token) {
     try {
       const stackPayload = await fetchStack({
         apiUrl,
