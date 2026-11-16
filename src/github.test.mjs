@@ -1338,3 +1338,92 @@ for (const body of [null, 'oops', 7]) {
     assert.equal(calls, 3)
   })
 }
+
+/** A 200 whose body ends early: the read rejects the way fetch does, not with a SyntaxError. */
+function cutShortResponse() {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => {
+      throw new TypeError('terminated')
+    },
+  }
+}
+
+test('a body cut short mid-wait is retried and the stack is still found', async () => {
+  const clock = fakeClock()
+  let calls = 0
+  const result = await resolvePull({
+    ...openedPull,
+    fetchImpl: async () => {
+      calls += 1
+      if (calls === 2) return cutShortResponse()
+      if (calls < 4) return jsonResponse({ number: 42, base: { ref: 'feat/auth' }, stack: null })
+      return jsonResponse({ number: 42, base: { ref: 'feat/auth' }, stack: middleStack })
+    },
+    sleep: clock.sleep,
+    now: clock.now,
+  })
+  assert.equal(calls, 4)
+  assert.deepEqual(result.stack, middleStack)
+})
+
+test('a body cut short on the only attempt throws as a network error', async () => {
+  let calls = 0
+  await assert.rejects(
+    resolvePull({
+      ...openedPull,
+      eventAction: 'synchronize',
+      fetchImpl: async () => {
+        calls += 1
+        return cutShortResponse()
+      },
+    }),
+    (err) => err.network === true && err.lookup === 'pull' && err.message === 'terminated',
+  )
+  assert.equal(calls, 1)
+})
+
+test('a whole body that is not JSON is still not retried', async () => {
+  const clock = fakeClock()
+  let calls = 0
+  await assert.rejects(
+    resolvePull({
+      ...openedPull,
+      fetchImpl: async () => {
+        calls += 1
+        return {
+          ok: true,
+          status: 200,
+          json: async () => {
+            throw new SyntaxError('Unexpected token')
+          },
+        }
+      },
+      sleep: clock.sleep,
+      now: clock.now,
+    }),
+    (err) => err instanceof SyntaxError && err.network !== true,
+  )
+  assert.equal(calls, 1)
+})
+
+test('resolveContext skips the stack listing for the remaining bottom with bottom-n 2', async () => {
+  let calls = 0
+  const result = await resolveContext({
+    eventAction: 'synchronize',
+    eventStack: { ...middleStack, position: 2 },
+    eventPrNumber: 11,
+    eventPrBaseRef: 'main',
+    repo: 'octo/hello',
+    token: 't',
+    bottomN: 2,
+    fetchImpl: async () => {
+      calls += 1
+      return jsonResponse({ pull_requests: [] })
+    },
+  })
+  assert.equal(calls, 0)
+  assert.equal(result.remainingDepth, null)
+  assert.equal(result.lookupProblem, null)
+})

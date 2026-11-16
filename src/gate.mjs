@@ -35,9 +35,11 @@ function oneLine(text) {
   return String(text).replace(/\s+/g, ' ').trim()
 }
 
-/** Neutralize Actions workflow commands in untrusted text. */
+/** Neutralize Actions workflow commands in untrusted text. Every colon in a run is split, so ':::' leaves no '::'. */
 function safeText(text) {
-  return oneLine(text).replaceAll('::', ': :').replaceAll('##[', '# [')
+  return oneLine(text)
+    .replace(/:{2,}/g, (run) => run.split('').join(' '))
+    .replaceAll('##[', '# [')
 }
 
 /** GitHub reads % codes in annotation text, so escape % to keep text like %0A from turning into a line break. */

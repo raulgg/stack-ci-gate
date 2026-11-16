@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import { test } from 'node:test'
 import {
   ConfigError,
@@ -77,6 +78,49 @@ test('top of 3, run_top=false → should_run=false', () => {
     prBaseRef: 'feat/api',
   })
   assert.equal(result.should_run, false)
+  assert.equal(result.reason, 'top of stack (run-top=false); skipping CI on this layer')
+})
+
+test('a skipped remaining bottom names bottom-n=0, also after a partial merge', () => {
+  for (const position of [1, 2]) {
+    const result = decide({
+      ...defaults,
+      bottomN: 0,
+      stack: stackOf({ position, size: 3 }),
+      prBaseRef: 'main',
+    })
+    assert.equal(result.should_run, false)
+    assert.equal(result.is_bottom, true)
+    assert.equal(result.reason, 'remaining bottom of stack (bottom-n=0); skipping CI on this layer')
+  }
+})
+
+test('a skipped single-layer stack names both knobs', () => {
+  const result = decide({
+    ...defaults,
+    bottomN: 0,
+    runTop: false,
+    stack: stackOf({ position: 1, size: 1 }),
+    prBaseRef: 'main',
+  })
+  assert.equal(result.should_run, false)
+  assert.equal(
+    result.reason,
+    'single-layer stack (bottom-n=0, run-top=false); skipping CI on this layer',
+  )
+})
+
+test('a skipped top with bottom-n=2 and a known depth names run-top=false', () => {
+  const result = decide({
+    ...defaults,
+    bottomN: 2,
+    runTop: false,
+    stack: stackOf({ position: 4, size: 4 }),
+    prBaseRef: 'feat/api',
+    remainingDepth: 4,
+  })
+  assert.equal(result.should_run, false)
+  assert.equal(result.reason, 'top of stack (run-top=false); skipping CI on this layer')
 })
 
 test('bottom_n=2 on remaining depth 2 of 4 → should_run=true', () => {
@@ -523,4 +567,47 @@ test('parseStackWaitSeconds defaults to 40 and accepts 0 to 100', () => {
   for (const bad of ['101', '300', '-1', '1.5', 'soon', '40s']) {
     assert.throws(() => parseStackWaitSeconds(bad), ConfigError)
   }
+})
+
+/** Reads `default:` for each input from action.yml, which is flat enough to scan by line. */
+function actionDefaults() {
+  const text = fs.readFileSync(new URL('../action.yml', import.meta.url), 'utf8')
+  const inputs = text.slice(text.indexOf('\ninputs:\n'), text.indexOf('\noutputs:\n'))
+  const defaults = {}
+  let name = null
+  for (const line of inputs.split('\n')) {
+    const key = line.match(/^  ([a-z-]+):\s*$/)
+    if (key) name = key[1]
+    const value = line.match(/^    default:\s*(.*)$/)
+    if (value && name) defaults[name] = value[1].replace(/^'(.*)'$/, '$1')
+  }
+  return defaults
+}
+
+test('action.yml defaults match what the parsers use for a missing input', () => {
+  const defaults = actionDefaults()
+  assert.deepEqual(Object.keys(defaults).sort(), [
+    'bottom-n',
+    'force-run-label',
+    'github-token',
+    'pr-number',
+    'run-top',
+    'stack-wait-seconds',
+  ])
+  assert.equal(parseBottomN(defaults['bottom-n']), parseBottomN(undefined))
+  assert.equal(parseRunTop(defaults['run-top']), parseRunTop(undefined))
+  assert.equal(parseForceRunLabel(defaults['force-run-label']), parseForceRunLabel(undefined))
+  assert.equal(
+    parseStackWaitSeconds(defaults['stack-wait-seconds']),
+    parseStackWaitSeconds(undefined),
+  )
+  assert.equal(defaults['stack-wait-seconds'], '40')
+  assert.equal(defaults['pr-number'], '')
+})
+
+test('action.yml runs on a Node that package.json engines allows', () => {
+  const text = fs.readFileSync(new URL('../action.yml', import.meta.url), 'utf8')
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.match(text, /^  using: node24$/m)
+  assert.equal(pkg.engines.node, '>=24.2')
 })

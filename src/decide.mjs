@@ -202,9 +202,18 @@ export function decide({
     depth != null && Number.isFinite(depth)
       ? `remaining depth ${depth}`
       : `position ${diag.position}`
+  // A bottom gets here only with bottom-n=0, and a top only with run-top=false.
+  const layer =
+    lowest && top
+      ? 'single-layer stack (bottom-n=0, run-top=false)'
+      : lowest
+        ? 'remaining bottom of stack (bottom-n=0)'
+        : top
+          ? 'top of stack (run-top=false)'
+          : `middle of stack (${depthLabel} of size ${diag.size})`
   return {
     should_run: false,
-    reason: `middle of stack (${depthLabel} of size ${diag.size}); skipping CI on this layer`,
+    reason: `${layer}; skipping CI on this layer`,
     ...diag,
   }
 }

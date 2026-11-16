@@ -1229,25 +1229,76 @@ test('a failed stack lookup that forces a run warns with the cause', async () =>
   assert.match(summary, /\| Stack lookup \| GET .*→ 403 \|/)
 })
 
-for (const [name, payload] of [
-  ['remaining bottom', midStackEvent({ baseRef: 'main', position: 1 })],
-  ['top', midStackEvent({ position: 3 })],
-]) {
-  test(`a failed stack lookup on the ${name} only logs with bottom-n=2`, async () => {
+test('a failed stack lookup on the top only logs with bottom-n=2', async () => {
+  const { out, warnings, errors, logs, summary } = await runCaptured(
+    tempDir(),
+    midStackEvent({ position: 3 }),
+    { 'INPUT_BOTTOM-N': '2' },
+    async () => jsonResponse({ message: 'nope' }, 403),
+  )
+  assert.equal(out['should-run'], 'true')
+  assert.deepEqual(warnings, [])
+  assert.deepEqual(errors, [])
+  assert.match(logs.join('\n'), /Stack lookup failed.*→ 403/)
+  assert.match(summary, /\| Stack lookup \| GET .*→ 403 \|/)
+  assert.doesNotMatch(summary, /Action needed/)
+})
+
+for (const token of ['t', '']) {
+  test(`the remaining bottom does not read the stack listing with bottom-n=2 and token ${JSON.stringify(token)}`, async () => {
+    let calls = 0
     const { out, warnings, errors, logs, summary } = await runCaptured(
       tempDir(),
-      payload,
-      { 'INPUT_BOTTOM-N': '2' },
-      async () => jsonResponse({ message: 'nope' }, 403),
+      midStackEvent({ baseRef: 'main', position: 1 }),
+      { 'INPUT_BOTTOM-N': '2', 'INPUT_GITHUB-TOKEN': token },
+      async () => {
+        calls += 1
+        return jsonResponse({ message: 'nope' }, 403)
+      },
     )
+    assert.equal(calls, 0)
     assert.equal(out['should-run'], 'true')
+    assert.equal(out.reason, 'lowest unmerged PR in the remaining stack')
     assert.deepEqual(warnings, [])
     assert.deepEqual(errors, [])
-    assert.match(logs.join('\n'), /Stack lookup failed.*→ 403/)
-    assert.match(summary, /\| Stack lookup \| GET .*→ 403 \|/)
-    assert.doesNotMatch(summary, /Action needed/)
+    assert.doesNotMatch(logs.join('\n'), /Stack lookup failed|github-token is empty/)
+    assert.doesNotMatch(summary, /Stack lookup|Action needed/)
   })
 }
+
+test('three or more colons in a label name leave no workflow command in reason', async () => {
+  for (const label of ['a:::b', 'a::::b', ':::::']) {
+    const { out, logs } = await runCaptured(
+      tempDir(),
+      midStackEvent({ labels: [{ name: label }] }),
+      { 'INPUT_FORCE-RUN-LABEL': label },
+      async () => jsonResponse({}),
+    )
+    assert.equal(out['should-run'], 'true')
+    assert.doesNotMatch(out.reason, /::/)
+    assert.doesNotMatch(logs.join('\n'), /::/)
+  }
+})
+
+test('skips name the layer in the reason output and the summary', async () => {
+  for (const [payload, env, reason] of [
+    [
+      midStackEvent({ baseRef: 'main', position: 1 }),
+      { 'INPUT_BOTTOM-N': '0' },
+      'remaining bottom of stack (bottom-n=0); skipping CI on this layer',
+    ],
+    [
+      midStackEvent({ position: 3 }),
+      { 'INPUT_RUN-TOP': 'false' },
+      'top of stack (run-top=false); skipping CI on this layer',
+    ],
+  ]) {
+    const { out, summary } = await runCaptured(tempDir(), payload, env, async () => jsonResponse({}))
+    assert.equal(out['should-run'], 'false')
+    assert.equal(out.reason, reason)
+    assert.ok(summary.includes(`| Reason | ${reason} |`))
+  }
+})
 
 test('a failed stack lookup on a force-run labeled mid-stack PR only logs', async () => {
   const { out, warnings, errors, logs, summary } = await runCaptured(

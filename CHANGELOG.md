@@ -21,6 +21,7 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 - On `opened` and `reopened`, any other PR that is not in a stack yet, such as one in a chain of PRs outside a stack, now waits up to `stack-wait-seconds` (default 40 s) instead of about 6 s; set `stack-wait-seconds: 6` to restore the 1.1.0 behaviour.
 - The recipe now runs gated jobs when the gate fails; update existing workflows to the new `continue-on-error` and `if:` lines in the [Quick start](README.md#quick-start).
 - The recommended `pull_request` types are now `opened`, `synchronize`, `reopened`, and `edited`; `labeled` and `stacked` are optional. Workflows with all six keep working, and can remove both: `stacked` almost always repeats a commit that was already tested, and `labeled` reruns CI on any label.
+- The README adds a "Checking a decision" section, a one-job layout example, and a Known gap: a re-run uses the first attempt's event, so a PR that skipped as mid-stack still skips on a re-run after it becomes the remaining bottom.
 - The README says when the action costs more Actions minutes than it saves, and says not to put the gate step in a matrix job. In a one-job layout, the wait can add a billed minute to that job. The skill leaves a workflow ungated when nothing in it takes more than about a minute, and never puts the gate step in a matrix job.
 
 ### Fixed
@@ -28,6 +29,10 @@ User-facing changes to this action. The format is [Keep a Changelog](https://kee
 - A missing token or a non-numeric `pr-number` no longer reports `not in a stack`.
 - A `pr-number` that is not a plain pull request number, such as `-3`, `0`, `1.5`, `0x10` or `1e3`, now runs CI and warns about the input. Before, `0x10` and `1e3` gated pull requests 16 and 1000, and the others failed on an API error.
 - `reason` names the failed lookup when remaining depth is unknown with `bottom-n` above 1.
+- `reason` names the layer when a bottom PR is skipped by `bottom-n: 0` or a top PR by `run-top: false`. Before, both read `middle of stack`.
+- A response body cut short during the stack wait is retried like a network error. Before, it ended the wait and ran CI.
+- With `bottom-n` above 1, the remaining bottom no longer reads the stack listing, so a failed listing no longer logs on a PR that runs either way.
+- `reason` and log text neutralize runs of three or more colons. Before, `:::` still left a `::` sequence.
 
 ## 1.1.0 - 2026-10-01
 

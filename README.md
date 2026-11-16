@@ -110,7 +110,23 @@ Jobs that run on every layer, such as `lint`, omit `needs: gate` and the `if:`.
 
 With `!cancelled()`, a job also runs when another job in its `needs` failed. If a gated job needs other jobs, add `&& needs.<other>.result == 'success'` for each.
 
-To gate steps inside one job, add the gate as a step with `continue-on-error: true`, and put `if: steps.gate.outputs.should-run != 'false'` on those steps.
+To gate steps inside one job, add the gate as a step with `continue-on-error: true`, and put `if: steps.gate.outputs.should-run != 'false'` on those steps. The job needs `pull-requests: read`. Put the gate step after the steps that run on every layer.
+
+```yaml
+test:
+  runs-on: ubuntu-latest
+  permissions:
+    contents: read
+    pull-requests: read
+  steps:
+    - uses: actions/checkout@v4
+    - run: npm run lint
+    - id: gate
+      uses: raulgg/stack-ci-gate@v1
+      continue-on-error: true # if the gate breaks, steps still run
+    - run: npm test
+      if: steps.gate.outputs.should-run != 'false'
+```
 
 Do not put the gate step in a matrix job. Each leg of the matrix waits and polls on its own. A matrix job can list the gate job in `needs`.
 
@@ -157,6 +173,36 @@ Remaining bottom is the PR whose base is the stack base. After a partial merge, 
 The label stays until someone removes it, and it can only turn a skip into a run.
 
 The action never cancels the run. `merge_group` always runs.
+
+### Checking a decision
+
+Each run of the gate step says what it decided and why, in three places:
+
+- The job summary on the run page. It has a `Stack CI Gate` table with the decision, the reason, the stack position, the event, and any wait.
+- The gate step log. It prints the reason.
+- The `reason` output.
+
+A skip names the layer. Mid-stack reads `middle of stack (position 2 of size 3); skipping CI on this layer`. A bottom PR skipped by `bottom-n: 0` reads `remaining bottom of stack (bottom-n=0); skipping CI on this layer`. A top PR skipped by `run-top: false` reads `top of stack (run-top=false); skipping CI on this layer`.
+
+When CI ran only because the gate could not decide, the run has a `Stack CI Gate` warning annotation. The job summary adds an `Action needed` section with the fix.
+
+To print the reason in another job, add `reason` to `jobs.gate.outputs` first:
+
+```yaml
+gate:
+  outputs:
+    should-run: ${{ steps.gate.outputs.should-run }}
+    reason: ${{ steps.gate.outputs.reason }}
+
+test:
+  needs: gate
+  if: ${{ !cancelled() && needs.gate.outputs.should-run != 'false' }}
+  runs-on: ubuntu-latest
+  steps:
+    - run: echo "$REASON"
+      env:
+        REASON: ${{ needs.gate.outputs.reason }}
+```
 
 ### `pull_request` types
 
@@ -236,6 +282,7 @@ Rule of thumb: the share of runs that skip as mid-stack has to exceed the gate's
 - A `workflow_dispatch` run [does not satisfy a required check](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#checks-from-some-workflow-jobs-are-not-evaluated). Push or run `gh stack rebase` instead.
 - A bottom merge made with `GITHUB_TOKEN`, such as `gh stack merge` in a workflow, starts no run on the next PR. That PR keeps its Skipped checks and looks mergeable (tested live). Merge with a user token, or run `gh stack rebase` after the merge.
 - Path filters on a stacked PR compare against the stack base.
+- A re-run uses the first attempt's event, so the gate decides the same way again. A PR that skipped as mid-stack and has since become the remaining bottom still skips on a re-run. Push or run `gh stack rebase` to start a new run.
 
 ## You might not need this action
 
