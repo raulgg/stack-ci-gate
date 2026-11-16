@@ -112,6 +112,10 @@ With `!cancelled()`, a job also runs when another job in its `needs` failed. If 
 
 To gate steps inside one job, add the gate as a step with `continue-on-error: true`, and put `if: steps.gate.outputs.should-run != 'false'` on those steps.
 
+Do not put the gate step in a matrix job. Each leg of the matrix waits and polls on its own. A matrix job can list the gate job in `needs`.
+
+Each gated workflow pays for its own gate job. Gate only workflows that have long jobs.
+
 ### Inputs
 
 | Name                 | Default               | Purpose                                                                                     |
@@ -172,6 +176,8 @@ Two more types are optional:
 - `labeled` starts a force-run without a push. Any added label starts a run. Only the force-run label turns a skip into a run. A workflow that leaves out `labeled` still force-runs on the next push or edit while the label is on the pull request.
 - `stacked` starts a run on `gh stack link` for PRs that already existed. `opened` or `synchronize` has almost always tested that commit already.
 
+If your workflow still has the 1.1.0 types, you can remove `stacked` and `labeled`. `stacked` almost always repeats a commit that was already tested. `labeled` reruns CI on any label. Keep `labeled` only if the force-run label should start a run without a push.
+
 ### Waiting for the stack on `opened`
 
 `gh stack submit` opens every PR first and links them into a stack a few seconds later. So on `opened`, the gate can't see the stack yet. On `opened` and `reopened` it checks again about every 5 seconds, for up to `stack-wait-seconds` (default 40). Other events decide in a few seconds.
@@ -207,7 +213,22 @@ In a bigger submit than the wait covers, the lowest mid-stack PRs run CI.
 
 - A separate gate job takes about the wait plus 5 seconds. Up to a wait of about 50 seconds, that's 1 billed minute.
 - A wait above about 50 seconds makes it 2 billed minutes. Only PRs that wait the full time pay it: the lowest mid-stack PRs of a large submit, and the full-wait cases above.
-- In a one-job layout the wait runs in a job that runs anyway, so there's no gate job to pay for. Put the gate step after the steps that run on every layer.
+- A one-job layout has no gate job. The wait adds its seconds to a job that runs anyway. That adds a billed minute whenever it pushes the job past a minute boundary. Put the gate step after the steps that run on every layer.
+
+## When this action costs more minutes than it saves
+
+GitHub bills each job rounded up to a whole minute. Standard runners are free in public repos, so there the action costs no minutes.
+
+The gate job costs 1 billed minute on every run. It saves minutes only on mid-stack PRs. It costs more than it saves when:
+
+- Few PRs are in stacks. Standalone PRs run every gated job and also pay for the gate job.
+- Stacks have 2 PRs. The bottom and the top both run, so nothing is skipped.
+- Gated jobs are short. Gating a job of about 1 minute saves nothing, because the gate job costs 1 minute.
+- Titles or bodies are edited often. The recipe requires `edited`, so each edit reruns gated jobs on standalone, bottom, and top PRs.
+
+A bottom merge sends the next PR a retarget `edited` and a cascade `synchronize` within about 3 seconds, so the new bottom runs CI twice.
+
+Rule of thumb: the share of PR events that skip as mid-stack has to exceed the gate's cost plus the share of runs that are title or body edits. The gate's cost is 1 minute divided by the gated jobs' minutes per run. With 10 minutes of gated jobs the gate costs 10%. If 15% of runs are title or body edits, more than 25% of runs have to skip.
 
 ## Known gaps
 

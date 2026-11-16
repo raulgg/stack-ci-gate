@@ -48,6 +48,8 @@ A gated pull request workflow is outdated when any of these is true:
 - A job that lists the gate job in `needs` has no `!cancelled()` in its `if`.
 - The gate job, or a job that lists it in `needs`, has a job-level `if` that filters on the event, such as `github.event.action`, `github.event.label`, or `github.event.pull_request.draft`.
 
+`stacked` or `labeled` in the `pull_request` types does not make a workflow outdated. On Asked and Rewrite, when a pull request workflow in scope has either type, say in the reply that it can be removed unless the user wants it. `stacked` almost always repeats a commit that was already tested. `labeled` reruns the workflow on any label. Leave both types in the file.
+
 Mark each file as gated, outdated, ungated, or not a pull request workflow. On Suggest, outdated counts as gated.
 
 On Suggest, when every pull request workflow is already gated, or the repo has none, make the workflow edit this task asked for, then stop. Do not mention this gate.
@@ -58,19 +60,21 @@ Asked and Rewrite continue to step 4. Suggest continues when an ungated pull req
 
 Asked. Run Apply the gate on the ungated and outdated pull request workflows in scope. If the user named workflow files, those files are the scope. If they named none and are agreeing to a suggestion, the scope is the files that suggestion named. If they named no file and are not answering a suggestion, the scope is every ungated or outdated pull request workflow. Leave the gate off a named file that is not a pull request workflow, and say so in the reply.
 
-Stop when each file you edited matches the done check under Apply the gate. When no file in scope needs the gate, or the repo has no pull request workflow, reply with one sentence that names the files already gated, or says that the repo has no pull request workflow.
+Stop when each file you edited matches the done check under Apply the gate. When no file in scope needs the gate, or the repo has no pull request workflow, reply with one sentence that names the files already gated, or says that the repo has no pull request workflow. Also name each file in scope that Apply the gate left ungated because nothing in it is long enough to skip.
 
 Rewrite. Make the workflow edit this task asked for. For the gate, edit only that workflow. When it is an ungated or outdated pull request workflow, run Apply the gate on it. When it is not a pull request workflow, leave the gate off.
 
 When another ungated pull request workflow remains, and this conversation has not already asked, name each one in the same reply and ask whether to gate it too. Leave those files unchanged.
 
-Stop when the file this task is creating or rewriting is saved with this task's edits. When that file is a pull request workflow, it also matches the done check under Apply the gate. Any ask names each other ungated pull request workflow.
+Stop when the file this task is creating or rewriting is saved with this task's edits. When that file is a pull request workflow, it also matches the done check under Apply the gate, unless Apply the gate left it ungated because nothing in it is long enough to skip. Any ask names each other ungated pull request workflow.
 
 Suggest. Make the workflow edit this task asked for. If this conversation has already asked, do not mention this gate. If it has not, name each ungated pull request workflow and ask whether to gate them. Stop when that edit is saved. When you ask, the reply names each ungated pull request workflow.
 
 ## Apply the gate
 
 Asked and Rewrite run this on each pull request workflow they gate.
+
+First check durations. Read recent run durations with `gh run list --workflow <file>` and `gh run view <run-id>`. When the workflow has no runs, judge from what each step does: tests, builds, and end-to-end suites are long; lint, format, and type checks are short. A job or step is long enough to skip when it takes more than about 1 minute. When the workflow is ungated and no job or step in it is long enough, leave the file unchanged. Say in the reply that you left it ungated because nothing in it takes more than about a minute, so the gate job's billed minute would cost more than it saves.
 
 If `pull_request` has no `types` list, set it to `opened`, `synchronize`, `reopened`, and `edited`. If it has a list, add any of those four that are missing. Keep every other trigger, type, branch filter, and path filter.
 
@@ -96,7 +100,9 @@ gate:
 
 The job runs for every event that starts the workflow. `should-run` can be `'false'` on `pull_request` and `pull_request_target`. On every other event, including `push`, `schedule`, and `merge_group`, it is `'true'`, so gated work still runs there.
 
-Look at recent Actions run durations and at what the steps do. Choose what skips on a mid-stack pull request. Gate work that takes long enough that a run on the bottom and the top is enough. Leave short checks on every layer, such as lint and format. Skip the whole job when nothing in it should run mid-stack. Skip a step when the rest of the job should still run.
+Choose what skips on a mid-stack pull request. Gate work that takes long enough that a run on the bottom and the top is enough. Do not gate a job or step that takes about 1 minute or less, such as lint and format. Leave it on every layer. Keep the gating on jobs and steps the workflow already gates. Skip the whole job when nothing in it should run mid-stack. Skip a step when the rest of the job should still run.
+
+Never put the gate step in a job that has `strategy.matrix`. Each leg would wait and poll. A matrix job can list the gate job in `needs`.
 
 On a gated job, append the gate job id to `needs` and keep the other dependencies. When `needs` is a single job, make it a list. Set `if: ${{ !cancelled() && needs.<gate-job>.outputs.should-run != 'false' }}`. `!cancelled()` runs the job when the gate job fails, and `should-run` is then empty. It also runs the job when another job in `needs` fails, so add `&& needs.<other>.result == 'success'` for each other job in `needs`.
 
@@ -104,7 +110,7 @@ When the job already has an `if`, wrap it in parentheses and put the new checks 
 
 On a gated step, put `if: needs.<gate-job>.outputs.should-run != 'false'` on the step. Append the gate job id to the job's `needs`, and give the job `if: ${{ !cancelled() }}` plus the same `result == 'success'` checks.
 
-In a one-job layout, where the gate is a step in the job it gates, gated steps use `if: steps.gate.outputs.should-run != 'false'` and need no `!cancelled()`.
+In a one-job layout, where the gate is a step in the job it gates and the job has no `strategy.matrix`, gated steps use `if: steps.gate.outputs.should-run != 'false'` and need no `!cancelled()`.
 
 Never add a job-level `if` that filters on the event (title or body edits, labels, drafts) to the gate job or to a job that lists it in `needs`. A run that skips a required job replaces an earlier Failure on the same commit, so a failing pull request can become mergeable. When such a filter exists, flag it in the reply with that reason and suggest removing the filter. For `labeled` or a draft type, also suggest removing the type from `on`. Never suggest removing `edited`.
 
@@ -119,5 +125,7 @@ You are done when each edited file meets all of these:
 - Every `should-run` comparison is `!= 'false'`.
 - Each job that lists the gate job in `needs` has `!cancelled()` in its `if`, plus `needs.<other>.result == 'success'` for each other need.
 - You added no job-level `if` that filters on the event.
+- You gated no job or step that takes about 1 minute or less, apart from those the file already gated.
+- No job that has `strategy.matrix` contains the gate step.
 
 In the reply, name what you gated, what still runs on every layer, and which gated checks a mid-stack pull request will report as Success without running. Say that every title or body edit reruns the workflow.
